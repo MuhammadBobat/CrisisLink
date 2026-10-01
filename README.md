@@ -1,4 +1,4 @@
-# GazaLink - Offline Bluetooth P2P Communication for Crisis Zones
+# CrisisLink - Offline Bluetooth P2P Communication for Crisis Zones
 
 A Flutter mobile application designed for reliable offline communication in crisis zones with severely limited infrastructure. The app enables direct device-to-device message exchange solely via Bluetooth peer-to-peer connections, with no internet, WiFi, or cellular dependency.
 
