@@ -51,12 +51,14 @@ object Packets {
 
     fun encodeHello(h: Hello): ByteArray = frame(Type.HELLO) { writeHelloBody(h); write(h.signature) }
 
-    fun encodeMessage(m: Message): ByteArray = frame(Type.MESSAGE) {
+    /** [ageMs] is the message's age at the moment of sending; relays pass their own computed age. */
+    fun encodeMessage(m: Message, ageMs: Long = m.ageAtReceiptMs): ByteArray = frame(Type.MESSAGE) {
         writeMessageHeader(m)
         writeInt(m.payload.size); write(m.payload)
         write(m.signature)
         writeByte(m.hopCount.coerceIn(0, 255))
         writeByte(m.sprayTokens.coerceIn(0, 255))
+        writeInt((ageMs / 1000).coerceIn(0, Int.MAX_VALUE.toLong()).toInt())
     }
 
     fun encodeAck(a: Ack): ByteArray = frame(Type.ACK) { writeAck(a) }
@@ -171,10 +173,11 @@ object Packets {
         val sig = bytes(64)
         val hops = readUnsignedByte()
         val tokens = readUnsignedByte()
+        val ageSeconds = readInt().coerceAtLeast(0)
         return Message(
             id = id, sourceId = Identity.nodeIdOf(keys), destinationId = dst, priority = priority,
             createdAtMs = created, ttlSeconds = ttl, sourceKeys = keys, payload = payload, signature = sig,
-            hopCount = hops, sprayTokens = tokens,
+            hopCount = hops, sprayTokens = tokens, ageAtReceiptMs = ageSeconds * 1000L,
         )
     }
 }

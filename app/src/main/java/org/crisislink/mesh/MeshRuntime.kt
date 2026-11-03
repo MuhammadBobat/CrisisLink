@@ -37,6 +37,7 @@ import org.crisislink.core.routing.SprayAndWaitRouter
 import org.crisislink.core.storage.BufferPolicy
 import org.crisislink.identity.KeystoreIdentityStore
 import org.crisislink.storage.CrisisLinkDb
+import org.crisislink.storage.MIGRATION_1_2
 import org.crisislink.storage.RoomMeshStore
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
@@ -61,7 +62,7 @@ class MeshRuntime(private val context: Context) {
     private val main = Handler(Looper.getMainLooper())
     private val prefs = context.getSharedPreferences("crisislink", Context.MODE_PRIVATE)
     private val identityStore = KeystoreIdentityStore(context)
-    private val db = Room.databaseBuilder(context, CrisisLinkDb::class.java, "crisislink.db").build()
+    private val db = Room.databaseBuilder(context, CrisisLinkDb::class.java, "crisislink.db").addMigrations(MIGRATION_1_2).build()
     private val store = RoomMeshStore(db.dao())
 
     val identity: Identity = identityStore.loadOrCreate()
