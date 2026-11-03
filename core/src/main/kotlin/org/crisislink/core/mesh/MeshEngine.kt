@@ -156,6 +156,7 @@ class MeshEngine(
     private fun onHello(peer: Peer, hello: Packets.Hello) {
         if (!hello.verify()) return reject(peer.link.id, "bad hello signature")
         val now = clock()
+        if (!helloIsFresh(hello, now)) return reject(peer.link.id, "replayed or stale hello")
         val summary = PeerSummary(
             nodeId = hello.nodeId,
             battery = hello.battery.toDouble(),
@@ -266,12 +267,32 @@ class MeshEngine(
 
     // --------------------------------------------------------------- helpers
 
+    /**
+     * A HELLO is signed, so it cannot be forged, but a recorded one could be played back to fake an
+     * encounter with its sender. Each sender's timestamps only ever increase (see [buildHello]), so a
+     * HELLO no newer than the last one seen from that node is a replay. This compares the sender's
+     * clock with itself, so it does not depend on the two phones' clocks agreeing.
+     */
+    private fun helloIsFresh(hello: Packets.Hello, now: Long): Boolean {
+        if (kotlin.math.abs(hello.timestampMs - now) > MAX_CLOCK_ERROR_MS) return false
+        val last = helloSeen[hello.nodeId]
+        if (last != null && hello.timestampMs <= last) return false
+        if (helloSeen.size > 1000) helloSeen.clear()      // bound memory against many throwaway identities
+        helloSeen[hello.nodeId] = hello.timestampMs
+        return true
+    }
+
+    private val helloSeen = HashMap<String, Long>()
+    private var lastHelloMs = 0L
+
     private fun buildHello(): Packets.Hello {
+        // Strictly increasing even if the phone's clock steps backwards, so honest HELLOs are never mistaken for replays.
         val now = clock()
+        val stamp = maxOf(now, lastHelloMs + 1).also { lastHelloMs = it }
         val all = store.messages()
         val unsigned = Packets.Hello(
             keys = identity.keys,
-            timestampMs = now,
+            timestampMs = stamp,
             battery = battery().toFloat(),
             bufferFree = BufferPolicy.freeFraction(all, now).toFloat(),
             predictability = encounters.export(now).mapValues { it.value.toFloat() },

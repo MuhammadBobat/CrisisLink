@@ -11,7 +11,7 @@ The Bluetooth layer, foreground service and Keystore storage compile and pass li
 - Reboot: the service comes back on its own.
 - Three phones: A sends to C while out of range, B carries it, and A's copy is dropped once C's signed receipt reaches A.
 - Expect trouble on specific makers (connection status 133, scan throttling, aggressive background killing on Xiaomi, Huawei and Samsung). Note what each phone needed.
-- Log contact length and throughput per link. These are the numbers needed for item 7.
+- Log contact length and throughput per link. These are the numbers needed for item 6.
 
 ## 2. Stored messages are readable on disk
 
@@ -20,14 +20,7 @@ Keys are encrypted by the Android Keystore, but received message text is stored 
 - Encrypt message text before it goes into Room (a Keystore-wrapped key, or SQLCipher for the whole database).
 - Panic wipe already deletes everything; make sure it also clears notifications.
 
-## 3. Replayed handshakes
-
-A recorded `HELLO` can be played back later. It is signed, so it cannot be forged, but nothing checks that it is fresh.
-
-- Reject a `HELLO` whose timestamp is far from now.
-- Remember recent `HELLO` signatures per link and drop repeats.
-
-## 4. Hybrid routing: give the DQN the spray tokens
+## 3. Hybrid routing: give the DQN the spray tokens
 
 The learned policy delivers 0.75 against Spray-and-Wait's 0.81 in the 30-world benchmark. It cannot see how many copies it is allowed to make.
 
@@ -35,45 +28,45 @@ The learned policy delivers 0.75 against Spray-and-Wait's 0.81 in the 30-world b
 - This changes the feature list, so edit `features.py`, `FeatureBuilder.kt` and `DqnRouter` together, rerun `make_fixtures.py`, retrain, and keep `ParityTest` green.
 - The Kotlin engine already splits tokens for every router, but `DqnRouter` ignores them today.
 
-## 5. Train on many worlds
+## 4. Train on many worlds
 
 Every training run used 50 nodes, a 12-message buffer and one traffic level. Randomise node count, area, buffer size, message rate and lifetime per episode so the policy does not overfit one setup.
 
-## 6. Search the training settings properly
+## 5. Search the training settings properly
 
 - Tune `copy_credit` (0.7, never tuned) and `tx_cost` together. Only 0.005, 0.01 and 0.02 were tried.
 - Run several seeds, generate episodes on all cores, and pick the winner by paired comparison against Spray-and-Wait over many validation worlds instead of 5 or 6.
 - Smaller upgrades to try after that: a larger or dueling network, multi-step returns, prioritized replay.
 
-## 7. Fairer baseline, and real numbers
+## 6. Fairer baseline, and real numbers
 
 - Sweep Spray-and-Wait's token count (only 8 was used) so the bar the DQN has to clear is honest.
 - Run the buffer-size and node-count sweeps that were skipped (`python evaluate.py` without `--skip-sweeps`).
 - Replace simulator guesses (contact range, link budget, message rate) with the measurements from item 1, then retrain.
 - Keep Spray-and-Wait as the default router in the app until the learned one beats it on real data.
 
-## 8. Android tests and CI
+## 7. Android tests and CI
 
 Only the shared logic in `core/` is tested. Add instrumented tests for the Room database and the Keystore identity store, and a CI job that runs `./gradlew :core:test :app:lintDebug` and the Python tests.
 
-## 9. Release packaging
+## 8. Release packaging
 
 - Signing config, minification, a monochrome launcher icon.
 - Google Play restricts the battery-optimisation exemption prompt (`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`). Decide whether to keep it or send people to settings instead.
 
-## 10. Usability
+## 9. Usability
 
 - Show contact names for senders instead of an ID prefix.
 - Clearer delivery states and a short first-run explanation of what the app does and does not protect.
 - Nobody besides the author has used the interface yet.
 
-## 11. Stronger cryptography (later)
+## 10. Stronger cryptography (later)
 
 - Messages sealed to a contact have no forward secrecy. Fixing that needs an interactive exchange, which is hard when the recipient is offline.
 - Encrypt each hop between neighbouring phones (Noise XX) so passers-by cannot see who a message is for.
 - Handle a contact's key changing.
 - Get an independent review before anyone depends on this for something that matters.
 
-## 12. iOS (maybe never)
+## 11. iOS (maybe never)
 
 Background Bluetooth is much more restricted on iPhone, so it would be a separate effort.
