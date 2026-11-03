@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-CrisisLink is a native Android app (Kotlin, Jetpack Compose) for delay-tolerant, end-to-end-encrypted messaging over Bluetooth LE. Forwarding is decided by a Deep Q-Learning policy **trained in Python (`simulation/`) and evaluated on-device in Kotlin (`core/`)**. It replaced an earlier Flutter app (the Flutter code and `ios/` are gone; do not re-add them). README.md has the overview, crypto table and limitations.
+CrisisLink is a native Android app (Kotlin, Jetpack Compose) for delay-tolerant, end-to-end-encrypted messaging over Bluetooth LE. Forwarding is decided by a Deep Q-Learning policy **trained in Python (`simulation/`) and evaluated on-device in Kotlin (`core/`)**. It replaced an earlier Flutter app (the Flutter code and `ios/` are gone; do not re-add them). README.md has the overview; TODO.md has the ranked list of known problems and next steps.
 
 ## Commands
 

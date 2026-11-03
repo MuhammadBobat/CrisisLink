@@ -1,0 +1,226 @@
+<title>CrisisLink Mesh Replay</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: control strip over three equal map panels (same world, one strategy each), results table underneath. */
+:root {
+  --bg: #f3f5f7; --panel: #ffffff; --fg: #16202b; --muted: #556373; --line: #d3dbe3;
+  --map: #eef2f5; --zone: #dce6ee; --node: #7d8a98; --accent: #1f5f8b;
+  --hold: #c26f00; --src: #1f5f8b; --dst: #1c8048; --flash: #16202b;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e151c; --panel: #16202a; --fg: #e5ecf2; --muted: #93a2b2; --line: #28353f;
+    --map: #0f1a23; --zone: #192a38; --node: #70808f; --accent: #6db3e8;
+    --hold: #f0a63a; --src: #6db3e8; --dst: #4cc27f; --flash: #e5ecf2; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e151c; --panel: #16202a; --fg: #e5ecf2; --muted: #93a2b2; --line: #28353f;
+  --map: #0f1a23; --zone: #192a38; --node: #70808f; --accent: #6db3e8;
+  --hold: #f0a63a; --src: #6db3e8; --dst: #4cc27f; --flash: #e5ecf2; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 var(--sans); }
+.wrap { max-width: 1180px; margin: 0 auto; padding-block: 28px 40px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1 { font-size: 1.7rem; line-height: 1.2; margin: 0 0 6px; font-weight: 600; text-wrap: balance; }
+.lede { margin: 0 0 20px; color: var(--muted); max-width: 70ch; }
+.controls { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; padding: 12px 14px; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 10px; margin-bottom: 14px; }
+.controls label { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+button, select { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 7px 12px; }
+button { cursor: pointer; } button.primary { background: var(--accent); border-color: var(--accent); color: var(--panel); font-weight: 600; min-width: 84px; }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.scrub { flex: 1 1 220px; min-width: 0; } .scrub input { width: 100%; accent-color: var(--accent); }
+.clock { font: 500 14px var(--mono); font-variant-numeric: tabular-nums; min-width: 8ch; }
+#msgSel { max-width: min(100%, 440px); }
+.panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 330px), 1fr)); gap: 14px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; min-width: 0; }
+.panel h2 { margin: 0 0 8px; font-size: 1rem; font-weight: 600; }
+canvas { display: block; width: 100%; aspect-ratio: 1; border-radius: 6px; background: var(--map); }
+.stats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin: 10px 0 0; font-size: 13px; }
+.stats dt { color: var(--muted); font-size: 12px; } .stats dd { margin: 0; font: 500 15px var(--mono); font-variant-numeric: tabular-nums; }
+.track { margin-top: 8px; font-size: 13px; min-height: 2.9em; color: var(--muted); } .track b { color: var(--fg); font-weight: 600; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 16px 0 6px; font-size: 13px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
+.table-wrap { overflow-x: auto; margin-top: 18px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: right; padding: 9px 14px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; } th { font-size: 12px; color: var(--muted); font-weight: 500; } tr:last-child td { border-bottom: 0; }
+.note { color: var(--muted); font-size: 13px; max-width: 80ch; margin: 12px 0 0; }
+</style>
+
+<main class="wrap">
+  <h1>Watching one message cross the mesh</h1>
+  <p class="lede">Fifty phones move between shelters with no network. Every strategy below sees the same people, the same movement and the same messages. Pick a message and see which phones end up carrying a copy.</p>
+
+  <section class="controls" aria-label="Playback">
+    <button id="play" class="primary" type="button">Play</button>
+    <button id="replay" type="button">Replay this message</button>
+    <label>Speed
+      <select id="speed"><option value="3">3 min per second</option><option value="10" selected>10 min per second</option><option value="30">30 min per second</option></select>
+    </label>
+    <label class="scrub">Time <input id="scrub" type="range" min="0" value="0" step="1" aria-label="Simulation time"></label>
+    <span class="clock" id="clock" aria-live="off">0h 00m</span>
+    <label>Message <select id="msgSel"></select></label>
+  </section>
+
+  <section class="panels" id="panels" aria-label="Three forwarding strategies"></section>
+
+  <div class="legend" aria-label="Legend">
+    <span><i class="sw" style="background:var(--node)"></i>phone</span>
+    <span><i class="sw" style="background:var(--src)"></i>sender</span>
+    <span><i class="sw" style="background:var(--dst)"></i>recipient</span>
+    <span><i class="sw" style="background:var(--hold)"></i>carries a copy of this message</span>
+    <span><i class="sw" style="background:var(--flash);opacity:.35"></i>any handoff in the last two minutes</span>
+    <span><i class="sw" style="background:var(--zone)"></i>shelter area</span>
+  </div>
+
+  <div class="table-wrap"><table id="results"></table></div>
+  <p class="note">This is one simulated world (seed <span id="seed"></span>), so the numbers are noisy. Across 30 worlds the delivery rates are 0.69 for flooding, 0.81 for Spray-and-Wait and 0.75 for the learned policy; the learned policy sends far fewer handoffs than flooding and reaches people sooner, but Spray-and-Wait still delivers more.</p>
+</main>
+
+<script>
+const D = __DATA__;
+const KEYS = Object.keys(D.runs), STRIDE = D.stride, DT = D.dt, F = D.positions.length, TOTAL = F * STRIDE;
+const LAST = KEYS[KEYS.length - 1];
+
+for (const k of KEYS) {
+  const r = D.runs[k];
+  r.steps = r.events.map(e => e[0]);
+  r.byMsg = new Map();
+  for (const e of r.events) { if (!r.byMsg.has(e[3])) r.byMsg.set(e[3], []); r.byMsg.get(e[3]).push(e); }
+  r.deliveries = r.delivered_at.filter(x => x !== null).sort((a, b) => a - b);
+}
+const lowerBound = (a, x) => { let lo = 0, hi = a.length; while (lo < hi) { const m = (lo + hi) >> 1; if (a[m] < x) lo = m + 1; else hi = m; } return lo; };
+const upperBound = (a, x) => { let lo = 0, hi = a.length; while (lo < hi) { const m = (lo + hi) >> 1; if (a[m] <= x) lo = m + 1; else hi = m; } return lo; };
+
+function trace(r, m, upto) {
+  const parent = {}, holders = new Set(); let delivered = null;
+  for (const e of r.byMsg.get(m) || []) {
+    if (e[0] > upto) break;
+    if (parent[e[2]] === undefined) parent[e[2]] = e[1];
+    if (e[4]) delivered = e; else holders.add(e[2]);
+  }
+  let path = null;
+  if (delivered) {
+    path = [delivered[2], delivered[1]]; let cur = delivered[1]; const seen = new Set(path);
+    while (cur !== D.messages[m].src && parent[cur] !== undefined && !seen.has(parent[cur])) { cur = parent[cur]; path.push(cur); seen.add(cur); }
+  }
+  return { holders, delivered, path };
+}
+
+let msg = 0, step = 0, playing = false, last = 0;
+const $ = id => document.getElementById(id);
+const fmt = s => { const t = Math.round(s * DT / 60); return Math.floor(t / 60) + 'h ' + String(t % 60).padStart(2, '0') + 'm'; };
+
+// ---- message chooser: default to a multi-hop message every strategy delivered
+function outcome(m) { return KEYS.map(k => D.runs[k].delivered_at[m] !== null); }
+let best = -1, bestLen = 0;
+D.messages.forEach((_, m) => {
+  if (!outcome(m).every(Boolean)) return;
+  const len = trace(D.runs[LAST], m, TOTAL).path.length;
+  if (len > bestLen) { best = m; bestLen = len; }
+});
+msg = best >= 0 ? best : 0;
+const sel = $('msgSel');
+D.messages.forEach((m, i) => {
+  const o = document.createElement('option'); o.value = i;
+  o.textContent = `#${i} phone ${m.src} to ${m.dst}${m.urgent ? ' (urgent)' : ''}, delivered by ${outcome(i).map((x, j) => x ? D.runs[KEYS[j]].label.split(' ')[0] : '').filter(Boolean).join(', ') || 'none'}`;
+  sel.appendChild(o);
+});
+sel.value = msg;
+
+// ---- panels
+const panels = KEYS.map(k => {
+  const el = document.createElement('article'); el.className = 'panel';
+  el.innerHTML = `<h2>${D.runs[k].label}</h2><canvas role="img" aria-label="Map of phones and message handoffs, ${D.runs[k].label}"></canvas>
+    <dl class="stats"><div><dt>Messages delivered</dt><dd data-f="del"></dd></div><div><dt>Handoffs so far</dt><dd data-f="tx"></dd></div></dl>
+    <div class="track" data-f="track"></div>`;
+  $('panels').appendChild(el);
+  const c = el.querySelector('canvas');
+  return { key: k, run: D.runs[k], c, ctx: c.getContext('2d'), del: el.querySelector('[data-f=del]'), tx: el.querySelector('[data-f=tx]'), track: el.querySelector('[data-f=track]') };
+});
+function fit() { for (const p of panels) { const dpr = window.devicePixelRatio || 1, w = Math.round(p.c.clientWidth * dpr); if (p.c.width !== w) { p.c.width = w; p.c.height = w; } } }
+new ResizeObserver(() => { fit(); render(); }).observe($('panels'));
+
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+function render() {
+  fit();
+  const fpos = Math.min(F - 1, step / STRIDE), i0 = Math.floor(fpos), i1 = Math.min(F - 1, i0 + 1), t = fpos - i0;
+  const A = D.positions[i0], B = D.positions[i1];
+  const col = { node: css('--node'), zone: css('--zone'), hold: css('--hold'), src: css('--src'), dst: css('--dst'), flash: css('--flash'), fg: css('--fg'), map: css('--map') };
+  const cm = D.messages[msg], created = cm.created;
+
+  for (const p of panels) {
+    const { ctx, c, run } = p, S = c.width / D.area, dpr = c.width / c.clientWidth;
+    const X = n => (A[n][0] + (B[n][0] - A[n][0]) * t) * S, Y = n => (A[n][1] + (B[n][1] - A[n][1]) * t) * S;
+    ctx.clearRect(0, 0, c.width, c.height);
+    ctx.fillStyle = col.zone;
+    for (const z of D.zones) { ctx.beginPath(); ctx.arc(z[0] * S, z[1] * S, D.zone_radius * S, 0, 6.2832); ctx.fill(); }
+
+    const tr = trace(run, msg, step), W = 4; // 4 steps = 40 s of recent handoffs
+    const lo = lowerBound(run.steps, step - W + 1), hi = upperBound(run.steps, step);
+    ctx.lineCap = 'round';
+    for (let i = lo; i < hi; i++) {
+      const e = run.events[i]; if (e[3] === msg) continue;
+      ctx.globalAlpha = 0.18 + 0.3 * (1 - (step - e[0]) / W); ctx.strokeStyle = col.flash; ctx.lineWidth = 1 * dpr;
+      ctx.beginPath(); ctx.moveTo(X(e[1]), Y(e[1])); ctx.lineTo(X(e[2]), Y(e[2])); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    if (tr.path) { // route the delivered copy took
+      ctx.strokeStyle = col.dst; ctx.lineWidth = 2.2 * dpr; ctx.globalAlpha = 0.85; ctx.beginPath();
+      tr.path.forEach((n, i) => i ? ctx.lineTo(X(n), Y(n)) : ctx.moveTo(X(n), Y(n))); ctx.stroke(); ctx.globalAlpha = 1;
+    }
+    for (let n = 0; n < D.n_nodes; n++) { ctx.fillStyle = col.node; ctx.beginPath(); ctx.arc(X(n), Y(n), 2.4 * dpr, 0, 6.2832); ctx.fill(); }
+    if (step >= created) {
+      ctx.fillStyle = col.hold;
+      for (const n of tr.holders) { ctx.beginPath(); ctx.arc(X(n), Y(n), 4.6 * dpr, 0, 6.2832); ctx.fill(); }
+      ctx.fillStyle = col.src; ctx.beginPath(); ctx.arc(X(cm.src), Y(cm.src), 6 * dpr, 0, 6.2832); ctx.fill();
+    }
+    ctx.fillStyle = col.dst; ctx.fillRect(X(cm.dst) - 5.5 * dpr, Y(cm.dst) - 5.5 * dpr, 11 * dpr, 11 * dpr);
+    ctx.strokeStyle = col.map; ctx.lineWidth = 1.5 * dpr; ctx.strokeRect(X(cm.dst) - 5.5 * dpr, Y(cm.dst) - 5.5 * dpr, 11 * dpr, 11 * dpr);
+
+    const made = upperBound(D.messages.map(m => m.created), step);
+    p.del.textContent = `${upperBound(run.deliveries, step)} of ${made}`;
+    p.tx.textContent = upperBound(run.steps, step).toLocaleString();
+    let line;
+    if (step < created) line = 'Not sent yet.';
+    else if (tr.delivered) line = `<b>Delivered</b> after ${Math.round((tr.delivered[0] - created) * DT / 60)} min over ${tr.path.length - 1} hop${tr.path.length > 2 ? 's' : ''}; ${tr.holders.size} phone${tr.holders.size === 1 ? '' : 's'} held a copy.`;
+    else line = `<b>In transit</b>: ${tr.holders.size} phone${tr.holders.size === 1 ? '' : 's'} carrying a copy.`;
+    if (p.track.innerHTML !== line) p.track.innerHTML = line;
+  }
+  $('clock').textContent = fmt(step);
+  $('scrub').value = Math.round(step);
+}
+
+function jumpToStory() {
+  const r = D.runs[LAST].byMsg.get(msg) || [], d = r.find(e => e[4]);
+  step = Math.min(TOTAL, d ? d[0] + 3 : D.messages[msg].created + 60); render();
+}
+function frame(now) {
+  if (playing) {
+    step += Number($('speed').value) * 60 / DT * Math.min(0.1, (now - last) / 1000);
+    if (step >= TOTAL) { step = TOTAL; playing = false; $('play').textContent = 'Play'; }
+    render();
+  }
+  last = now; requestAnimationFrame(frame);
+}
+$('play').onclick = () => { if (step >= TOTAL) step = 0; playing = !playing; $('play').textContent = playing ? 'Pause' : 'Play'; };
+$('replay').onclick = () => { step = Math.max(0, D.messages[msg].created - 4); playing = true; $('play').textContent = 'Pause'; };
+$('scrub').max = TOTAL; $('scrub').oninput = e => { step = Number(e.target.value); render(); };
+sel.onchange = () => { msg = Number(sel.value); jumpToStory(); };
+
+// ---- results table for this world
+$('seed').textContent = D.seed;
+$('results').innerHTML = '<thead><tr><th>Strategy</th><th>Delivered</th><th>Urgent delivered</th><th>Handoffs per delivery</th><th>Median delay</th></tr></thead><tbody>' +
+  KEYS.map(k => { const s = D.runs[k].summary; return `<tr><td>${D.runs[k].label}</td><td>${(s.delivery_ratio * 100).toFixed(0)}%</td><td>${(s.urgent_delivery_ratio * 100).toFixed(0)}%</td><td>${s.overhead.toFixed(1)}</td><td>${s.median_latency_min.toFixed(0)} min</td></tr>`; }).join('') + '</tbody>';
+
+jumpToStory();
+requestAnimationFrame(frame);
+</script>

@@ -68,4 +68,4 @@ How to read this honestly:
 - The DQN has the **lowest median latency** (about 10 min faster than Spray-and-Wait), and its delivery is statistically indistinguishable from PRoPHET's with fewer transmissions.
 - The margin (`DqnPolicy.margin`, applied at decision time without retraining) trades delivery for overhead.
 
-Not yet done: the buffer-size and node-count sweeps (`python evaluate.py` without `--skip-sweeps`; the 100-node runs are slow), tuning `tx_cost` beyond a coarse 0.005 / 0.01 / 0.02 check, multiple training seeds, and validation on real mobility traces. All results are synthetic-mobility results.
+This is one simulator with synthetic movement, one training seed and a coarse search over the transmission cost. What to try next is ranked in [../TODO.md](../TODO.md).
