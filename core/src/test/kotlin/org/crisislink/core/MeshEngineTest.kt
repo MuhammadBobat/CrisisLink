@@ -167,4 +167,81 @@ class MeshEngineTest {
         net.nowMs += 3 * 3600_000L
         assertTrue("2 h lifetime ends 2 h after arrival whatever B's clock says", atB.isExpiredAt(net.nowMs + b.skewMs))
     }
+
+    // ---- urgent-flag abuse --------------------------------------------------------------------
+
+    private fun filler(net: FakeNetwork, owner: FakeNetwork.Node, n: Int, from: String = "ee".repeat(8)) =
+        (0 until n).forEach {
+            owner.store.upsert(
+                org.crisislink.core.model.Message(
+                    id = "%032x".format(it + 1), sourceId = from, destinationId = "dd".repeat(8), priority = Priority.NORMAL,
+                    createdAtMs = net.nowMs, sourceKeys = owner.identity.keys, payload = ByteArray(0), signature = ByteArray(0),
+                    firstSeenMs = net.nowMs + it,
+                ),
+            )
+        }
+
+    @Test
+    fun strangerCannotEvictWithUrgentFlag() {
+        val net = FakeNetwork()
+        val mallory = net.Node("M"); val victim = net.Node("V")
+        filler(net, victim, org.crisislink.core.storage.BufferPolicy.CAPACITY)
+        net.connect(mallory, victim)
+        mallory.engine.sendBroadcast("EMERGENCY (not really)", Priority.URGENT); net.pump()
+        assertEquals(org.crisislink.core.storage.BufferPolicy.CAPACITY, victim.store.messages().size)
+        assertTrue(victim.store.messages().none { it.sourceId == mallory.identity.nodeId })
+    }
+
+    @Test
+    fun contactsUrgentMessageMayEvictAStrangersNormalOne() {
+        val net = FakeNetwork()
+        val alice = net.Node("A"); val victim = net.Node("V")
+        victim.store.putContact(alice.contact)
+        filler(net, victim, org.crisislink.core.storage.BufferPolicy.CAPACITY)
+        net.connect(alice, victim)
+        alice.engine.sendBroadcast("water at the school", Priority.URGENT); net.pump()
+        val held = victim.store.messages()
+        assertEquals(org.crisislink.core.storage.BufferPolicy.CAPACITY, held.size)
+        assertTrue(held.any { it.sourceId == alice.identity.nodeId })
+    }
+
+    @Test
+    fun manyThrowawayIdentitiesCannotFillTheBufferWithUrgent() {
+        val net = FakeNetwork()
+        val victim = net.Node("V")
+        repeat(10) { i ->
+            val m = net.Node("M$i")
+            m.engine.sendBroadcast("spam $i", Priority.URGENT)
+            net.connect(m, victim); net.disconnect(m, victim)
+        }
+        val urgent = victim.store.messages().count { it.isUrgent }
+        assertEquals(org.crisislink.core.storage.BufferPolicy.MAX_STRANGER_URGENT, urgent)
+        assertTrue(victim.rejected.isNotEmpty())
+    }
+
+    @Test
+    fun oneStrangerIsRateLimitedAndRecoversAfterAnHour() {
+        val net = FakeNetwork()
+        val mallory = net.Node("M"); val victim = net.Node("V")
+        net.connect(mallory, victim)
+        fun spam(i: Int) {
+            mallory.store.messages().forEach { mallory.store.delete(it.id) }     // keep M's own buffer free
+            mallory.engine.sendBroadcast("spam $i", Priority.URGENT); net.pump()
+            victim.store.messages().forEach { victim.store.delete(it.id) }       // keep V's cap from being the limit
+        }
+        repeat(8) { spam(it) }
+        assertEquals(org.crisislink.core.storage.BufferPolicy.MAX_URGENT_PER_STRANGER_PER_HOUR, victim.received.size)
+        net.nowMs += 61 * 60_000L
+        spam(99)
+        assertEquals(org.crisislink.core.storage.BufferPolicy.MAX_URGENT_PER_STRANGER_PER_HOUR + 1, victim.received.size)
+    }
+
+    @Test
+    fun normalTrafficIsUnaffectedByTheUrgentLimits() {
+        val net = FakeNetwork()
+        val a = net.Node("A"); val b = net.Node("B")
+        a.engine.sendDirect(b.contact, "ordinary", Priority.NORMAL)
+        net.connect(a, b)
+        assertEquals(1, b.received.size)
+    }
 }
