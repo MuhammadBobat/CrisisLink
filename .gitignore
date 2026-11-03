@@ -58,3 +58,7 @@ build/
 local.properties
 *.apk
 captures/
+
+# IDE build output
+core/bin/
+app/bin/
