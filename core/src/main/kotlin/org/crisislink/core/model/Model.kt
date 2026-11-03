@@ -29,16 +29,26 @@ data class Message(
     val copiesMade: Int = 0,
     val status: DeliveryStatus = DeliveryStatus.PENDING,
     val text: String? = null,
+    /** When this phone first held the message, by this phone's clock. Local only, never sent. */
+    val firstSeenMs: Long = createdAtMs,
+    /** Age the message already had when it reached this phone. Travels on the wire, unsigned. */
+    val ageAtReceiptMs: Long = 0,
 ) {
     val isBroadcast: Boolean get() = destinationId == null
     val isUrgent: Boolean get() = priority == Priority.URGENT
-    val expiresAtMs: Long get() = createdAtMs + ttlSeconds * 1000L
+    private val ttlMs: Long get() = ttlSeconds * 1000L
 
-    fun isExpiredAt(nowMs: Long): Boolean = nowMs >= expiresAtMs
+    /**
+     * How long the message has existed. Measured as the age it arrived with plus time on this phone's
+     * own clock, so a wrong sender clock cannot expire it early or keep it alive. [createdAtMs] is
+     * only a signed label.
+     */
+    fun ageMs(nowMs: Long): Long = ageAtReceiptMs + (nowMs - firstSeenMs).coerceAtLeast(0)
+
+    fun isExpiredAt(nowMs: Long): Boolean = ageMs(nowMs) >= ttlMs
 
     /** Remaining lifetime as a fraction of the TTL, in [0, 1]. */
-    fun ttlLeft(nowMs: Long): Double =
-        ((expiresAtMs - nowMs).toDouble() / (ttlSeconds * 1000.0)).coerceIn(0.0, 1.0)
+    fun ttlLeft(nowMs: Long): Double = ((ttlMs - ageMs(nowMs)).toDouble() / ttlMs).coerceIn(0.0, 1.0)
 
     override fun equals(other: Any?) = other is Message && other.id == id && other.status == status &&
         other.hopCount == hopCount && other.copiesMade == copiesMade && other.text == text

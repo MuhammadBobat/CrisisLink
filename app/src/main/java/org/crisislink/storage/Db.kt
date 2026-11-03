@@ -1,5 +1,6 @@
 package org.crisislink.storage
 
+import androidx.room.ColumnInfo
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
@@ -8,6 +9,8 @@ import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import org.crisislink.core.model.Ack
 import org.crisislink.core.model.Contact
 import org.crisislink.core.model.DeliveryStatus
@@ -33,6 +36,8 @@ class MessageRow(
     val copiesMade: Int,
     val status: Int,
     val text: String?,
+    @ColumnInfo(defaultValue = "0") val firstSeenMs: Long,
+    @ColumnInfo(defaultValue = "0") val ageAtReceiptMs: Long,
 )
 
 @Entity(tableName = "acks")
@@ -80,11 +85,20 @@ interface MeshDao {
 
 @Database(
     entities = [MessageRow::class, AckRow::class, ContactRow::class, EncounterRow::class, MetaRow::class],
-    version = 1,
+    version = 2,
     exportSchema = false,
 )
 abstract class CrisisLinkDb : RoomDatabase() {
     abstract fun dao(): MeshDao
+}
+
+/** Messages now track their own age instead of trusting the sender's clock. */
+val MIGRATION_1_2 = object : Migration(1, 2) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE messages ADD COLUMN firstSeenMs INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE messages ADD COLUMN ageAtReceiptMs INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("UPDATE messages SET firstSeenMs = createdAtMs")
+    }
 }
 
 class RoomMeshStore(private val dao: MeshDao) : MeshStore {
@@ -121,10 +135,11 @@ class RoomMeshStore(private val dao: MeshDao) : MeshStore {
         createdAtMs = createdAtMs, ttlSeconds = ttlSeconds, sourceKeys = PublicKeys(encKey, signKey),
         payload = payload, signature = signature, hopCount = hopCount, sprayTokens = sprayTokens,
         copiesMade = copiesMade, status = DeliveryStatus.entries[status], text = text,
+        firstSeenMs = firstSeenMs, ageAtReceiptMs = ageAtReceiptMs,
     )
 
     private fun Message.toRow() = MessageRow(
         id, sourceId, destinationId, priority.ordinal, createdAtMs, ttlSeconds, sourceKeys.encryption, sourceKeys.signing,
-        payload, signature, hopCount, sprayTokens, copiesMade, status.ordinal, text,
+        payload, signature, hopCount, sprayTokens, copiesMade, status.ordinal, text, firstSeenMs, ageAtReceiptMs,
     )
 }

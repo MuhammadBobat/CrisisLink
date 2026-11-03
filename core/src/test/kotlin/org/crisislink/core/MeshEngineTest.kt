@@ -108,4 +108,63 @@ class MeshEngineTest {
         assertEquals(before, net.sentPackets)
         assertEquals(1, b.received.size)
     }
+
+    // ---- phone clocks -------------------------------------------------------------------------
+
+    @Test
+    fun senderClockThreeHoursBehindStillDelivers() {
+        val net = FakeNetwork()
+        val a = net.Node("A", skewMs = -3 * 3600_000L); val b = net.Node("B")
+        a.engine.sendDirect(b.contact, "my clock is wrong", Priority.NORMAL)
+        net.connect(a, b)
+        assertEquals(listOf("my clock is wrong"), b.received.map { it.text })
+    }
+
+    @Test
+    fun senderClockFiveHoursAheadStillDelivers() {
+        val net = FakeNetwork()
+        val a = net.Node("A", skewMs = 5 * 3600_000L); val b = net.Node("B")
+        a.engine.sendDirect(b.contact, "from the future", Priority.NORMAL)
+        net.connect(a, b)
+        assertEquals(1, b.received.size)
+    }
+
+    @Test
+    fun absurdTimestampsAreStillRejected() {
+        val net = FakeNetwork()
+        val a = net.Node("A", skewMs = 72 * 3600_000L); val b = net.Node("B")
+        a.engine.sendDirect(b.contact, "three days off", Priority.NORMAL)
+        net.connect(a, b)
+        assertTrue(b.received.isEmpty())
+    }
+
+    @Test
+    fun ageTravelsWithTheMessageAcrossHops() {
+        val net = FakeNetwork()
+        val a = net.Node("A", SprayAndWaitRouter()); val b = net.Node("B", SprayAndWaitRouter())
+        val c = net.Node("C", SprayAndWaitRouter()); val d = net.Node("D")
+        val sent = a.engine.sendDirect(d.contact, "slow courier", Priority.NORMAL)
+
+        net.connect(a, b); net.disconnect(a, b)
+        net.nowMs += 90 * 60_000L                       // B carries it for 90 minutes
+        net.connect(b, c); net.disconnect(b, c)
+        val atC = c.store.message(sent.id)!!
+        assertEquals(90 * 60_000L, atC.ageAtReceiptMs)
+
+        val cNow = net.nowMs + c.skewMs
+        assertFalse(atC.isExpiredAt(cNow + 20 * 60_000L))   // 110 min old
+        assertTrue(atC.isExpiredAt(cNow + 40 * 60_000L))    // 130 min old, past the 2 h lifetime
+    }
+
+    @Test
+    fun relayWithWrongClockStillExpiresOnTime() {
+        val net = FakeNetwork()
+        val a = net.Node("A", SprayAndWaitRouter()); val b = net.Node("B", SprayAndWaitRouter(), skewMs = -4 * 3600_000L)
+        val d = net.Node("D")
+        val sent = a.engine.sendDirect(d.contact, "x", Priority.NORMAL)
+        net.connect(a, b); net.disconnect(a, b)
+        val atB = b.store.message(sent.id)!!
+        net.nowMs += 3 * 3600_000L
+        assertTrue("2 h lifetime ends 2 h after arrival whatever B's clock says", atB.isExpiredAt(net.nowMs + b.skewMs))
+    }
 }

@@ -17,13 +17,14 @@ class FakeNetwork(var nowMs: Long = 1_800_000_000_000L) {
     var tamper: ((ByteArray) -> ByteArray)? = null
     var sentPackets = 0
 
-    inner class Node(val name: String, router: Router = ProphetRouter()) {
+    /** [skewMs] makes this phone's clock run ahead (positive) or behind (negative) of the network's. */
+    inner class Node(val name: String, router: Router = ProphetRouter(), val skewMs: Long = 0) {
         val identity = Identity.generate()
         val store = InMemoryMeshStore()
         val received = mutableListOf<Message>()
         val delivered = mutableListOf<String>()
         val rejected = mutableListOf<String>()
-        val engine = MeshEngine(identity, store, router, { 1.0 }, { nowMs }, object : MeshListener {
+        val engine = MeshEngine(identity, store, router, { 1.0 }, { nowMs + skewMs }, object : MeshListener {
             override fun onMessageReceived(message: Message) { received += message }
             override fun onMessageDelivered(messageId: String) { delivered += messageId }
             override fun onRejected(linkId: String, reason: String) { rejected += reason }

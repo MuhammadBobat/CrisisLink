@@ -178,13 +178,17 @@ class MeshEngine(
         if (!Crypto.verify(m.sourceKeys, m.signature, Packets.messageSignedBytes(header, m.payload))) {
             return reject(peer.link.id, "bad message signature")
         }
-        if (m.isExpiredAt(now) || m.createdAtMs > now + CLOCK_SKEW_MS || m.ttlSeconds > MAX_TTL_SECONDS) return
+        // Clocks on offline phones drift, so only an absurd timestamp is rejected. Lifetime is judged by
+        // the age the message carries plus time on this phone, never by the sender's clock.
+        if (kotlin.math.abs(m.createdAtMs - now) > MAX_CLOCK_ERROR_MS || m.ttlSeconds !in 1..MAX_TTL_SECONDS) return
+        val received = m.copy(firstSeenMs = now)
+        if (received.isExpiredAt(now)) return
         if (store.message(m.id) != null || store.hasAck(m.id)) return
 
         when {
             m.destinationId == nodeId -> {
                 val plain = Crypto.open(identity, m.payload, header) ?: return reject(peer.link.id, "cannot open")
-                store.upsert(m.copy(status = DeliveryStatus.DELIVERED, text = String(plain), copiesMade = 0))
+                store.upsert(received.copy(status = DeliveryStatus.DELIVERED, text = String(plain), copiesMade = 0))
                 val ack = signAck(m.id)
                 store.putAck(ack)
                 peer.link.send(Packets.encodeAck(ack))
@@ -195,7 +199,7 @@ class MeshEngine(
                 if (!ok) return
                 victim?.let { store.delete(it) }
                 val text = if (m.isBroadcast) runCatching { String(Crypto.unpad(m.payload)) }.getOrNull() else null
-                store.upsert(m.copy(status = DeliveryStatus.SENT, copiesMade = 0, text = text))
+                store.upsert(received.copy(status = DeliveryStatus.SENT, copiesMade = 0, text = text))
                 if (m.isBroadcast) listener.onMessageReceived(store.message(m.id)!!)
             }
         }
@@ -237,7 +241,7 @@ class MeshEngine(
         for (m in router.selectForPeer(held, summary, link, local, now)) {
             val toDestination = m.destinationId == summary.nodeId
             val give = if (toDestination) 0 else SprayAndWaitRouter.tokensToGive(m.sprayTokens)
-            peer.link.send(Packets.encodeMessage(m.copy(hopCount = m.hopCount + 1, sprayTokens = give)))
+            peer.link.send(Packets.encodeMessage(m.copy(hopCount = m.hopCount + 1, sprayTokens = give), ageMs = m.ageMs(now)))
             peer.sent += m.id
             store.upsert(
                 m.copy(
@@ -287,7 +291,7 @@ class MeshEngine(
     companion object {
         const val MAX_ACKS_IN_HELLO = 32
         const val MAX_PACKETS_PER_MINUTE = 120
-        const val CLOCK_SKEW_MS = 10 * 60_000L
+        const val MAX_CLOCK_ERROR_MS = 48 * 3600_000L
         const val MAX_TTL_SECONDS = 24 * 3600
     }
 }
