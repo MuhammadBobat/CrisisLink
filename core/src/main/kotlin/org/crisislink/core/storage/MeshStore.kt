@@ -60,16 +60,32 @@ object BufferPolicy {
     fun freeFraction(all: List<Message>, nowMs: Long): Double =
         (1.0 - carried(all, nowMs).size.toDouble() / CAPACITY).coerceIn(0.0, 1.0)
 
+    /** Urgent messages from people who are not contacts may hold at most this many slots in total. */
+    const val MAX_STRANGER_URGENT = 4
+
+    /** Urgent messages accepted from one non-contact per hour. */
+    const val MAX_URGENT_PER_STRANGER_PER_HOUR = 5
+
+    fun strangerUrgent(all: List<Message>, selfId: String, contactIds: Set<String>, nowMs: Long): Int =
+        carried(all, nowMs).count { it.isUrgent && it.sourceId != selfId && it.sourceId !in contactIds }
+
     /**
-     * Finds room for one more carried message. A full buffer only admits urgent messages, by
-     * evicting the oldest normal one; [force] (our own new message) may evict too.
+     * Finds room for one more carried message. A full buffer only admits an incoming message that may
+     * evict ([incomingUrgent], which the engine sets only for urgent messages from contacts); [force]
+     * (our own new message) may evict too. The victim is the oldest normal message, preferring those
+     * from strangers, then contacts, and our own last.
      * Returns (ok, evicted message id or null).
      */
-    fun makeRoom(all: List<Message>, incomingUrgent: Boolean, nowMs: Long, force: Boolean = false): Pair<Boolean, String?> {
+    fun makeRoom(
+        all: List<Message>, incomingUrgent: Boolean, nowMs: Long, force: Boolean = false,
+        selfId: String? = null, contactIds: Set<String> = emptySet(),
+    ): Pair<Boolean, String?> {
         val carried = carried(all, nowMs)
         if (carried.size < CAPACITY) return true to null
         if (!incomingUrgent && !force) return false to null
-        val victim = carried.filter { !it.isUrgent }.minByOrNull { it.createdAtMs } ?: return false to null
+        val victim = carried.filter { !it.isUrgent }
+            .sortedWith(compareBy({ it.sourceId == selfId }, { it.sourceId in contactIds }, { it.firstSeenMs }))
+            .firstOrNull() ?: return false to null
         return true to victim.id
     }
 }

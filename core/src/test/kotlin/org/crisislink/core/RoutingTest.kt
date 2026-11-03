@@ -103,4 +103,19 @@ class RoutingTest {
         assertEquals(false to null, BufferPolicy.makeRoom(full, incomingUrgent = false, nowMs = now))
         assertEquals(true to "n0", BufferPolicy.makeRoom(full, incomingUrgent = true, nowMs = now))
     }
+
+    @Test
+    fun evictionPrefersStrangersThenContactsThenOurOwn() {
+        val contact = "c0".repeat(8); val stranger = "e1".repeat(8)
+        // the contact's message is the oldest, but a stranger's message must go first
+        val full = (0 until BufferPolicy.CAPACITY).map { i ->
+            val src = when (i) { 0 -> contact; 1 -> me; else -> stranger }
+            msg("m$i", created = now + i).copy(sourceId = src, firstSeenMs = now + i)
+        }
+        assertEquals("m2", BufferPolicy.makeRoom(full, true, now, selfId = me, contactIds = setOf(contact)).second)
+        val noStrangers = full.filter { it.sourceId != stranger }.let { kept ->
+            kept + (kept.size until BufferPolicy.CAPACITY).map { msg("pad$it", pr = Priority.NORMAL).copy(sourceId = contact, firstSeenMs = now + 100 + it) }
+        }
+        assertEquals("m0", BufferPolicy.makeRoom(noStrangers, true, now, selfId = me, contactIds = setOf(contact)).second)
+    }
 }

@@ -195,7 +195,18 @@ class MeshEngine(
                 listener.onMessageReceived(store.message(m.id)!!)
             }
             else -> {
-                val (ok, victim) = BufferPolicy.makeRoom(store.messages(), m.isUrgent, now)
+                val contactIds = store.contacts().map { it.nodeId }.toSet()
+                val fromContact = m.sourceId in contactIds
+                if (m.isUrgent && !fromContact) {
+                    // Anyone can set the urgent flag, so strangers get a small share of the buffer and a rate limit.
+                    if (BufferPolicy.strangerUrgent(store.messages(), nodeId, contactIds, now) >= BufferPolicy.MAX_STRANGER_URGENT) {
+                        return reject(peer.link.id, "urgent from strangers at capacity")
+                    }
+                    if (!withinUrgentQuota(m.sourceId, now)) return reject(peer.link.id, "urgent rate limit")
+                }
+                val (ok, victim) = BufferPolicy.makeRoom(
+                    store.messages(), incomingUrgent = m.isUrgent && fromContact, now, selfId = nodeId, contactIds = contactIds,
+                )
                 if (!ok) return
                 victim?.let { store.delete(it) }
                 val text = if (m.isBroadcast) runCatching { String(Crypto.unpad(m.payload)) }.getOrNull() else null
@@ -274,6 +285,17 @@ class MeshEngine(
     private fun signAck(messageId: String): Ack {
         val now = clock()
         return Ack(messageId, nodeId, identity.keys, now, identity.sign(Packets.ackSignedBytes(messageId, now)))
+    }
+
+    private val urgentSeen = HashMap<String, ArrayDeque<Long>>()
+
+    private fun withinUrgentQuota(sourceId: String, now: Long): Boolean {
+        if (urgentSeen.size > 1000) urgentSeen.clear()    // bound memory against many throwaway identities
+        val q = urgentSeen.getOrPut(sourceId) { ArrayDeque() }
+        while (q.isNotEmpty() && now - q.first() > 3600_000L) q.removeFirst()
+        if (q.size >= BufferPolicy.MAX_URGENT_PER_STRANGER_PER_HOUR) return false
+        q.addLast(now)
+        return true
     }
 
     private fun withinRateLimit(peer: Peer): Boolean {
