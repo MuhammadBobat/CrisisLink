@@ -53,13 +53,75 @@ class BluetoothDeviceList extends StatelessWidget {
       );
     }
 
-    return ListView.builder(
+    // Separate GazaLink devices from other devices
+    final gazalinkDevices = devices.where((d) => d.isGazaLinkDevice).toList();
+    final otherDevices = devices.where((d) => !d.isGazaLinkDevice).toList();
+
+    return ListView(
       padding: const EdgeInsets.all(16),
-      itemCount: devices.length,
-      itemBuilder: (context, index) {
-        final device = devices[index];
-        return _buildDeviceCard(device);
-      },
+      children: [
+        // GazaLink Devices Section
+        if (gazalinkDevices.isNotEmpty) ...[
+          _buildSectionHeader('GazaLink Peers', Icons.bluetooth_connected, Colors.blue),
+          const SizedBox(height: 8),
+          ...gazalinkDevices.map((device) => _buildDeviceCard(device)),
+          const SizedBox(height: 16),
+        ],
+        
+        // Other Devices Section
+        if (otherDevices.isNotEmpty) ...[
+          _buildSectionHeader('Other Devices', Icons.bluetooth, Colors.grey),
+          const SizedBox(height: 8),
+          ...otherDevices.map((device) => _buildDeviceCard(device)),
+        ],
+        
+        // No devices found message
+        if (devices.isEmpty) ...[
+          const Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.bluetooth_disabled, size: 64, color: Colors.grey),
+                SizedBox(height: 16),
+                Text(
+                  'No devices found',
+                  style: TextStyle(fontSize: 18, color: Colors.grey),
+                ),
+                SizedBox(height: 8),
+                Text(
+                  'Start scanning to discover nearby devices',
+                  style: TextStyle(color: Colors.grey),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildSectionHeader(String title, IconData icon, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 20),
+          const SizedBox(width: 8),
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -69,12 +131,14 @@ class BluetoothDeviceList extends StatelessWidget {
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
-      elevation: 2,
+      elevation: device.isGazaLinkDevice ? 4 : 2,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: device.isConnected
             ? BorderSide(color: Colors.green, width: 2)
-            : BorderSide.none,
+            : device.isGazaLinkDevice
+                ? BorderSide(color: Colors.blue, width: 1)
+                : BorderSide.none,
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -87,12 +151,34 @@ class BluetoothDeviceList extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        device.name,
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
+                      Row(
+                        children: [
+                          Text(
+                            device.name,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          if (device.isGazaLinkDevice) ...[
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.blue,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Text(
+                                'GazaLink',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                       const SizedBox(height: 4),
                       Text(

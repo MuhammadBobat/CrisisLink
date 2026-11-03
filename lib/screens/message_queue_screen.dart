@@ -55,6 +55,9 @@ class _MessageQueueScreenState extends State<MessageQueueScreen>
     try {
       await _bluetoothService.initialize();
       
+      // Start advertising automatically so other devices can find this one
+      await _bluetoothService.startAdvertising();
+      
       // Update UI periodically
       Timer.periodic(const Duration(seconds: 2), (timer) {
         if (mounted) {
@@ -248,8 +251,12 @@ class _MessageQueueScreenState extends State<MessageQueueScreen>
                                       title: Text(message.content),
                                       subtitle: Text(
                                         'Priority: ${message.priority.name}, '
-                                        'Status: ${message.deliveryStatus.name}',
+                                        'Status: ${message.deliveryStatus.name}\n'
+                                        '${message.isBroadcast ? 'Broadcast' : 'To ${message.destinationId}'}'
+                                        '${message.sourceId.isEmpty ? '' : ' · from ${message.sourceId}'}'
+                                        '${message.hopCount > 0 ? ' · ${message.hopCount} hop(s)' : ''}',
                                       ),
+                                      isThreeLine: true,
                                       leading: Icon(
                                         message.priority == Priority.urgent
                                             ? Icons.warning

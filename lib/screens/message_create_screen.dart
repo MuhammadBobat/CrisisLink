@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'dart:async';
 import '../models/message.dart';
+import '../routing/node_identity.dart';
 import '../services/storage_service.dart';
 
 class MessageCreateScreen extends StatefulWidget {
@@ -15,12 +16,14 @@ class MessageCreateScreen extends StatefulWidget {
 class _MessageCreateScreenState extends State<MessageCreateScreen> {
   final _formKey = GlobalKey<FormState>();
   final _contentController = TextEditingController();
+  final _recipientController = TextEditingController();
   Priority _selectedPriority = Priority.normal;
   bool _isSubmitting = false;
 
   @override
   void dispose() {
     _contentController.dispose();
+    _recipientController.dispose();
     super.dispose();
   }
 
@@ -30,12 +33,15 @@ class _MessageCreateScreenState extends State<MessageCreateScreen> {
     setState(() => _isSubmitting = true);
 
     try {
+      final storageService = context.read<StorageService>();
+      final recipient = _recipientController.text.trim().toUpperCase();
       final message = Message(
         content: _contentController.text.trim(),
         priority: _selectedPriority,
+        sourceId: await NodeIdentity.load(),
+        destinationId: recipient.isEmpty ? null : recipient,
       );
 
-      final storageService = context.read<StorageService>();
       await storageService.saveMessage(message);
 
       if (mounted) {
@@ -66,6 +72,7 @@ class _MessageCreateScreenState extends State<MessageCreateScreen> {
 
   void _clearForm() {
     _contentController.clear();
+    _recipientController.clear();
     setState(() {
       _selectedPriority = Priority.normal;
     });
@@ -143,6 +150,33 @@ class _MessageCreateScreenState extends State<MessageCreateScreen> {
                                 }
                                 if (value.trim().length < 3) {
                                   return 'Message must be at least 3 characters';
+                                }
+                                return null;
+                              },
+                            ),
+                            const SizedBox(height: 20),
+                            const Text(
+                              'Recipient Node ID',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            TextFormField(
+                              controller: _recipientController,
+                              textCapitalization: TextCapitalization.characters,
+                              decoration: InputDecoration(
+                                hintText: 'Leave empty to broadcast nearby',
+                                helperText: 'Ask the recipient for the ID shown on their dashboard',
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                              validator: (value) {
+                                final v = value?.trim() ?? '';
+                                if (v.isNotEmpty && !RegExp(r'^[0-9A-Fa-f]{8}$').hasMatch(v)) {
+                                  return 'Node IDs are 8 characters (0-9, A-F)';
                                 }
                                 return null;
                               },

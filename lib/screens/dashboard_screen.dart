@@ -1,8 +1,10 @@
 import '../models/bluetooth_device.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'dart:async';
+import '../routing/node_identity.dart';
 import '../services/storage_service.dart';
 import '../services/bluetooth_service.dart';
 import '../models/message.dart';
@@ -165,6 +167,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     _buildStatsCards(),
                     const SizedBox(height: 24),
                     _buildBluetoothStatus(),
+                    const SizedBox(height: 16),
+                    _buildRoutingCard(),
                     const SizedBox(height: 24),
                     _buildRecentMessages(),
                     const SizedBox(height: 24),
@@ -249,6 +253,60 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildRoutingCard() {
+    final routing = context.read<BluetoothService>().routing;
+    final ready = routing.isReady;
+    return FutureBuilder<String>(
+      future: NodeIdentity.load(),
+      builder: (context, snapshot) {
+        final nodeId = snapshot.data ?? '...';
+        return Card(
+          elevation: 4,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Routing',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 16),
+                _buildStatusRow('Your node ID', nodeId, Icons.badge, Colors.blue),
+                _buildStatusRow(
+                  'Policy',
+                  !ready
+                      ? 'Loads with Bluetooth'
+                      : routing.usingLearnedPolicy
+                          ? 'Deep Q-Learning'
+                          : 'PRoPHET fallback',
+                  Icons.alt_route,
+                  ready && routing.usingLearnedPolicy ? Colors.green : Colors.orange,
+                ),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    onPressed: snapshot.hasData
+                        ? () {
+                            Clipboard.setData(ClipboardData(text: nodeId));
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Node ID copied')),
+                            );
+                          }
+                        : null,
+                    icon: const Icon(Icons.copy, size: 18),
+                    label: const Text('Copy ID'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 

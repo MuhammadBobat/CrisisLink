@@ -43,3 +43,11 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Simulation artifacts
+simulation/.venv/
+simulation/results/*.log
+simulation/results/*.pt
+simulation/results/results.json
+__pycache__/
+.pytest_cache/

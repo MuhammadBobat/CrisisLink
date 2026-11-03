@@ -7,6 +7,7 @@ class BluetoothDeviceInfo {
   final bool isConnectable;
   final bool isConnected;
   final BluetoothDevice? device;
+  final bool isGazaLinkDevice;
 
   BluetoothDeviceInfo({
     required this.id,
@@ -15,6 +16,7 @@ class BluetoothDeviceInfo {
     required this.isConnectable,
     this.isConnected = false,
     this.device,
+    this.isGazaLinkDevice = false,
   });
 
   Map<String, dynamic> toJson() {
@@ -24,6 +26,7 @@ class BluetoothDeviceInfo {
       'rssi': rssi,
       'isConnectable': isConnectable,
       'isConnected': isConnected,
+      'isGazaLinkDevice': isGazaLinkDevice,
     };
   }
 
@@ -34,6 +37,7 @@ class BluetoothDeviceInfo {
       rssi: json['rssi'],
       isConnectable: json['isConnectable'],
       isConnected: json['isConnected'] ?? false,
+      isGazaLinkDevice: json['isGazaLinkDevice'] ?? false,
     );
   }
 
@@ -44,6 +48,7 @@ class BluetoothDeviceInfo {
     bool? isConnectable,
     bool? isConnected,
     BluetoothDevice? device,
+    bool? isGazaLinkDevice,
   }) {
     return BluetoothDeviceInfo(
       id: id ?? this.id,
@@ -52,6 +57,7 @@ class BluetoothDeviceInfo {
       isConnectable: isConnectable ?? this.isConnectable,
       isConnected: isConnected ?? this.isConnected,
       device: device ?? this.device,
+      isGazaLinkDevice: isGazaLinkDevice ?? this.isGazaLinkDevice,
     );
   }
 }

@@ -1,13 +1,21 @@
 import 'dart:async';
 import 'dart:developer' as developer;
-import 'dart:convert';
-import 'dart:typed_data';
+import 'package:battery_plus/battery_plus.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../models/bluetooth_device.dart';
 import '../models/message.dart';
 import '../models/sync_status.dart';
+import '../routing/peer_summary.dart';
+import '../routing/routing_service.dart';
 import 'storage_service.dart';
+import 'sync_protocol.dart';
 
+/// BLE discovery, connection and routed message exchange.
+///
+/// Sync with a connected peer has two framed exchanges on the message characteristic:
+///   1. hello:  both sides swap a PeerSummary (battery, buffer, encounter row, held/delivered ids)
+///   2. bundle: each side sends only the messages its routing policy picked for that peer
+/// Nothing is flooded: what is sent is decided hop by hop by [RoutingService].
 class BluetoothService {
   static final BluetoothService _instance = BluetoothService._internal();
   factory BluetoothService() => _instance;
@@ -15,58 +23,74 @@ class BluetoothService {
 
   final List<BluetoothDeviceInfo> _discoveredDevices = [];
   final List<BluetoothDeviceInfo> _connectedDevices = [];
-  
+  final Map<String, DateTime> _connectedAt = {};
+
   BluetoothScanStatus _scanStatus = BluetoothScanStatus.idle;
   BluetoothConnectionStatus _connectionStatus = BluetoothConnectionStatus.disconnected;
-  
+
   bool _isBluetoothEnabled = false;
   StreamSubscription<List<ScanResult>>? _scanSubscription;
   bool _isInitialized = false;
+  bool _isAdvertising = false;
+
+  late final StorageService _storage = StorageService();
+  late final RoutingService routing = RoutingService(
+    storage: _storage,
+    batteryLevel: () async {
+      try {
+        return (await Battery().batteryLevel) / 100.0;
+      } catch (_) {
+        return 1.0;
+      }
+    },
+  );
 
   // Custom UUIDs for GazaLink
-  static const String SERVICE_UUID = '9fa480e0-4967-4542-9390-d343dc5d04ae'; // GazaLink Service
-  static const String MESSAGE_CHAR_UUID = 'af0badb1-5b99-43cd-917a-a77bc549e3cc'; // Message Queue Characteristic
-  static const int MTU_SIZE = 512; // Maximum transmission unit size
+  static const String SERVICE_UUID = '9fa480e0-4967-4542-9390-d343dc5d04ae';
+  static const String MESSAGE_CHAR_UUID = 'af0badb1-5b99-43cd-917a-a77bc549e3cc';
+  static const int MTU_REQUEST = 247;
+  static const int DEFAULT_CHUNK = 20; // ATT payload at the default 23-byte MTU
 
   // Sync status
   final _syncStatusController = StreamController<SyncProgress>.broadcast();
   Stream<SyncProgress> get syncStatus => _syncStatusController.stream;
-  SyncStatus _currentSyncStatus = SyncStatus.idle;
 
   // Retry configuration
   static const int MAX_RETRY_ATTEMPTS = 3;
   static const Duration RETRY_DELAY = Duration(seconds: 2);
+  static const Duration FRAME_TIMEOUT = Duration(seconds: 20);
 
-  // Getters
   List<BluetoothDeviceInfo> get discoveredDevices => List.unmodifiable(_discoveredDevices);
   List<BluetoothDeviceInfo> get connectedDevices => List.unmodifiable(_connectedDevices);
   BluetoothScanStatus get scanStatus => _scanStatus;
   BluetoothConnectionStatus get connectionStatus => _connectionStatus;
   bool get isBluetoothEnabled => _isBluetoothEnabled;
   bool get isInitialized => _isInitialized;
+  bool get isAdvertising => _isAdvertising;
 
-  // Initialize Bluetooth service
   Future<void> initialize() async {
     if (_isInitialized) return;
-    
+
     try {
-      // Check if Bluetooth is supported
       if (await FlutterBluePlus.isSupported == false) {
         throw Exception('Bluetooth not supported');
       }
 
-      // Listen to Bluetooth state changes
       FlutterBluePlus.adapterState.listen((state) {
         _isBluetoothEnabled = state == BluetoothAdapterState.on;
         developer.log('Bluetooth state changed: $state', name: 'BluetoothService');
       });
 
-      // Get initial state
       final initialState = await FlutterBluePlus.adapterState.first;
       _isBluetoothEnabled = initialState == BluetoothAdapterState.on;
-      
+
+      await routing.initialize();
+
       _isInitialized = true;
-      developer.log('Bluetooth Service initialized successfully. Enabled: $_isBluetoothEnabled', name: 'BluetoothService');
+      developer.log(
+          'Bluetooth Service initialized. Enabled: $_isBluetoothEnabled, '
+          'learned policy: ${routing.usingLearnedPolicy}',
+          name: 'BluetoothService');
     } catch (e) {
       developer.log('Error initializing Bluetooth: $e', name: 'BluetoothService');
       _isInitialized = false;
@@ -74,14 +98,11 @@ class BluetoothService {
     }
   }
 
-  // Request permissions
   Future<bool> requestPermissions() async {
     try {
       if (!_isInitialized) {
         await initialize();
       }
-      
-      // Request location permission (required for Bluetooth scanning on Android)
       await FlutterBluePlus.turnOn();
       return true;
     } catch (e) {
@@ -90,120 +111,120 @@ class BluetoothService {
     }
   }
 
-  // Start scanning
+  // Advertising needs a native GATT server (flutter_blue_plus is central-only), which is
+  // not implemented yet. The flag only reflects that this node is willing to be found.
+  Future<void> startAdvertising() async {
+    try {
+      if (!_isInitialized) await initialize();
+      if (!await requestPermissions() || !_isBluetoothEnabled) return;
+      _isAdvertising = true;
+    } catch (e) {
+      developer.log('Error starting advertising: $e', name: 'BluetoothService');
+      _isAdvertising = false;
+    }
+  }
+
+  Future<void> stopAdvertising() async {
+    _isAdvertising = false;
+  }
+
   Future<void> startScan() async {
     try {
-      developer.log('Starting Bluetooth scan...', name: 'BluetoothService');
-      
-      if (!_isInitialized) {
-        await initialize();
-      }
-      
-      final hasPermissions = await requestPermissions();
-      if (!hasPermissions) {
-        developer.log('Bluetooth permissions not granted', name: 'BluetoothService');
+      if (!_isInitialized) await initialize();
+
+      if (!await requestPermissions() || !_isBluetoothEnabled) {
+        developer.log('Bluetooth unavailable for scanning', name: 'BluetoothService');
         _scanStatus = BluetoothScanStatus.error;
         return;
       }
 
-      if (!_isBluetoothEnabled) {
-        developer.log('Bluetooth is not enabled', name: 'BluetoothService');
-        _scanStatus = BluetoothScanStatus.error;
-        return;
-      }
-
-      developer.log('Bluetooth is enabled, starting scan...', name: 'BluetoothService');
       _scanStatus = BluetoothScanStatus.scanning;
       _discoveredDevices.clear();
 
-      // Start scanning with service UUID filter
       _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
         for (ScanResult result in results) {
-          // Only add devices that advertise our service UUID
-          if (result.advertisementData.serviceUuids.contains(SERVICE_UUID)) {
-            final deviceInfo = BluetoothDeviceInfo(
-              id: result.device.remoteId.toString(),
-              name: result.device.platformName.isEmpty 
-                  ? 'Unknown Device' 
-                  : result.device.platformName,
-              rssi: result.rssi,
-              isConnectable: result.advertisementData.connectable,
-              device: result.device,
-            );
+          final isGazaLinkDevice = result.advertisementData.serviceUuids.contains(Guid(SERVICE_UUID)) ||
+              result.device.platformName.contains('GazaLink');
 
-            // Update or add device to list
-            final index = _discoveredDevices.indexWhere((d) => d.id == deviceInfo.id);
-            if (index != -1) {
-              _discoveredDevices[index] = deviceInfo;
-            } else {
-              _discoveredDevices.add(deviceInfo);
-            }
+          final deviceName = result.device.platformName.isEmpty
+              ? (isGazaLinkDevice ? 'GazaLink Device' : 'Unknown Device')
+              : result.device.platformName;
 
-            developer.log('Found GazaLink device: ${deviceInfo.name} (RSSI: ${deviceInfo.rssi})', name: 'BluetoothService');
+          final deviceInfo = BluetoothDeviceInfo(
+            id: result.device.remoteId.toString(),
+            name: deviceName,
+            rssi: result.rssi,
+            isConnectable: result.advertisementData.connectable,
+            device: result.device,
+            isGazaLinkDevice: isGazaLinkDevice,
+          );
+
+          final index = _discoveredDevices.indexWhere((d) => d.id == deviceInfo.id);
+          if (index != -1) {
+            _discoveredDevices[index] = deviceInfo;
+          } else {
+            _discoveredDevices.add(deviceInfo);
           }
+
+          // GazaLink devices first, then by signal strength
+          _discoveredDevices.sort((a, b) {
+            if (a.isGazaLinkDevice != b.isGazaLinkDevice) {
+              return a.isGazaLinkDevice ? -1 : 1;
+            }
+            return b.rssi.compareTo(a.rssi);
+          });
         }
       });
 
       await FlutterBluePlus.startScan(
         timeout: const Duration(seconds: 10),
         androidScanMode: AndroidScanMode.lowLatency,
-        withServices: [Guid(SERVICE_UUID)], // Only scan for devices with our service
       );
-
-      developer.log('GazaLink Bluetooth scan started successfully', name: 'BluetoothService');
     } catch (e) {
       developer.log('Error starting scan: $e', name: 'BluetoothService');
       _scanStatus = BluetoothScanStatus.error;
     }
   }
 
-  // Stop scanning
   Future<void> stopScan() async {
     try {
-      developer.log('Stopping Bluetooth scan...', name: 'BluetoothService');
       _scanStatus = BluetoothScanStatus.stopped;
-      
       await FlutterBluePlus.stopScan();
       await _scanSubscription?.cancel();
       _scanSubscription = null;
-      
-      developer.log('GazaLink Bluetooth scan stopped successfully', name: 'BluetoothService');
     } catch (e) {
       developer.log('Error stopping scan: $e', name: 'BluetoothService');
     }
   }
 
-  // Connect to a device
   Future<void> connectToDevice(String deviceId) async {
     try {
-      developer.log('Connecting to device: $deviceId', name: 'BluetoothService');
       _connectionStatus = BluetoothConnectionStatus.connecting;
-      
+
       final deviceInfo = _discoveredDevices.firstWhere(
         (d) => d.id == deviceId,
         orElse: () => throw Exception('Device not found'),
       );
-
       if (deviceInfo.device == null) {
         throw Exception('Device object not available');
       }
 
-      // Connect to the device
-      await deviceInfo.device!.connect(timeout: const Duration(seconds: 10));
-      
-      // Update device status
+      await deviceInfo.device!.connect(
+        timeout: const Duration(seconds: 10),
+        license: License.free,
+      );
+
       final updatedDevice = deviceInfo.copyWith(isConnected: true);
       final index = _discoveredDevices.indexWhere((d) => d.id == deviceId);
       if (index != -1) {
         _discoveredDevices[index] = updatedDevice;
       }
-      
+
       _connectedDevices.add(updatedDevice);
+      _connectedAt[deviceId] = DateTime.now();
       _connectionStatus = BluetoothConnectionStatus.connected;
-      
-      developer.log('Successfully connected to GazaLink device: ${deviceInfo.name}', name: 'BluetoothService');
-      
-      // Trigger message queue synchronization upon connection
+
+      developer.log('Connected to ${deviceInfo.name}', name: 'BluetoothService');
       await syncMessageQueues();
     } catch (e) {
       developer.log('Error connecting to device: $e', name: 'BluetoothService');
@@ -212,12 +233,10 @@ class BluetoothService {
     }
   }
 
-  // Disconnect from a device
   Future<void> disconnectFromDevice(String deviceId) async {
     try {
-      developer.log('Disconnecting from device: $deviceId', name: 'BluetoothService');
       _connectionStatus = BluetoothConnectionStatus.disconnecting;
-      
+
       final deviceInfo = _connectedDevices.firstWhere(
         (d) => d.id == deviceId,
         orElse: () => throw Exception('Device not connected'),
@@ -226,18 +245,16 @@ class BluetoothService {
       if (deviceInfo.device != null) {
         await deviceInfo.device!.disconnect();
       }
-      
-      // Update device status
+
       final updatedDevice = deviceInfo.copyWith(isConnected: false);
       final index = _discoveredDevices.indexWhere((d) => d.id == deviceId);
       if (index != -1) {
         _discoveredDevices[index] = updatedDevice;
       }
-      
+
       _connectedDevices.removeWhere((d) => d.id == deviceId);
+      _connectedAt.remove(deviceId);
       _connectionStatus = BluetoothConnectionStatus.disconnected;
-      
-      developer.log('Successfully disconnected from GazaLink device: ${deviceInfo.name}', name: 'BluetoothService');
     } catch (e) {
       developer.log('Error disconnecting from device: $e', name: 'BluetoothService');
       _connectionStatus = BluetoothConnectionStatus.error;
@@ -245,209 +262,126 @@ class BluetoothService {
     }
   }
 
-  // Sync message queues with connected device
+  /// Exchange routed message bundles with every connected peer.
   Future<void> syncMessageQueues() async {
-    try {
-      developer.log('Starting message queue synchronization...', name: 'BluetoothService');
-      
-      if (_connectedDevices.isEmpty) {
-        developer.log('No connected devices to sync with', name: 'BluetoothService');
-        return;
-      }
+    if (_connectedDevices.isEmpty) {
+      developer.log('No connected devices to sync with', name: 'BluetoothService');
+      return;
+    }
+    if (!routing.isReady) await routing.initialize();
 
-      // Step 3: Automatically trigger sending the local queue as JSON
-      await _sendLocalQueueToPeers();
-      
-      developer.log('Message queue sync completed', name: 'BluetoothService');
-      
-    } catch (e) {
-      developer.log('Error during message queue sync: $e', name: 'BluetoothService');
-      rethrow;
+    for (final peer in List.of(_connectedDevices)) {
+      try {
+        await _syncWithPeer(peer);
+      } catch (e) {
+        developer.log('Error syncing with ${peer.name}: $e', name: 'BluetoothService');
+        _updateSyncStatus(SyncStatus.error, 0.0, 'Error syncing with ${peer.name}', error: e.toString());
+      }
     }
   }
 
-  // Send local message queue to all connected peers
-  Future<void> _sendLocalQueueToPeers() async {
-    try {
-      final storageService = StorageService();
-      final localMessagesJson = await storageService.getMessagesAsJson();
-      
-      _updateSyncStatus(
-        SyncStatus.inProgress,
-        0.0,
-        'Preparing to send messages to ${_connectedDevices.length} peer(s)',
-      );
+  Future<void> _syncWithPeer(BluetoothDeviceInfo peer) async {
+    final device = peer.device!;
+    _updateSyncStatus(SyncStatus.inProgress, 0.05, 'Connecting to ${peer.name}...');
 
-      // Split data into chunks if needed
-      final chunks = _splitDataIntoChunks(localMessagesJson);
-      final totalChunks = chunks.length;
-      
-      for (final connectedDevice in _connectedDevices) {
-        try {
-          // Discover services
-          _updateSyncStatus(
-            SyncStatus.inProgress,
-            0.1,
-            'Discovering services on ${connectedDevice.name}...',
-          );
-          
-          final services = await connectedDevice.device!.discoverServices();
-          final service = services.firstWhere(
-            (s) => s.serviceUuid.toString() == SERVICE_UUID,
-            orElse: () => throw Exception('Required GazaLink service not found'),
-          );
-          
-          final characteristic = service.characteristics.firstWhere(
-            (c) => c.characteristicUuid.toString() == MESSAGE_CHAR_UUID,
-            orElse: () => throw Exception('Required GazaLink message characteristic not found'),
-          );
+    if (device.mtuNow < MTU_REQUEST) {
+      try {
+        await device.requestMtu(MTU_REQUEST);
+      } catch (_) {
+        // A refused MTU request just means smaller chunks.
+      }
+    }
+    final chunkSize = (device.mtuNow - 3).clamp(DEFAULT_CHUNK, 512);
 
-          // Send data chunks
-          int sentChunks = 0;
-          for (final chunk in chunks) {
-            await _sendChunkWithRetry(characteristic, chunk);
-            sentChunks++;
-            
-            final progress = (sentChunks / totalChunks) * 0.5; // 50% progress for sending
-            _updateSyncStatus(
-              SyncStatus.inProgress,
-              progress,
-              'Sending messages to ${connectedDevice.name} (${sentChunks}/$totalChunks)',
-            );
-          }
+    final services = await device.discoverServices();
+    final service = services.firstWhere(
+      (s) => s.serviceUuid.toString() == SERVICE_UUID,
+      orElse: () => throw Exception('GazaLink service not found'),
+    );
+    final characteristic = service.characteristics.firstWhere(
+      (c) => c.characteristicUuid.toString() == MESSAGE_CHAR_UUID,
+      orElse: () => throw Exception('GazaLink message characteristic not found'),
+    );
 
-          // Wait for and process response
-          _updateSyncStatus(
-            SyncStatus.inProgress,
-            0.75,
-            'Receiving messages from ${connectedDevice.name}...',
-          );
-          
-          final response = await _receiveDataWithRetry(characteristic);
-          await _receiveMessageQueueFromPeer(response, connectedDevice.id);
-          
-          _updateSyncStatus(
-            SyncStatus.completed,
-            1.0,
-            'Sync completed with ${connectedDevice.name}',
-          );
-        } catch (e) {
-          developer.log('Error syncing with device ${connectedDevice.name}: $e', name: 'BluetoothService');
-          _updateSyncStatus(
-            SyncStatus.error,
-            0.0,
-            'Error syncing with ${connectedDevice.name}',
-            error: e.toString(),
-          );
-          // Continue with next device even if one fails
-          continue;
+    // 1. hello
+    _updateSyncStatus(SyncStatus.inProgress, 0.2, 'Exchanging routing state with ${peer.name}...');
+    final mine = await routing.buildSummary();
+    await _sendFrame(characteristic, {'t': 'hello', 'summary': mine.toJson()}, chunkSize);
+    final helloIn = await _receiveFrame(characteristic) as Map<String, dynamic>;
+    if (helloIn['t'] != 'hello') throw Exception('Unexpected frame from peer: ${helloIn['t']}');
+    final theirs = PeerSummary.fromJson(helloIn['summary'] as Map<String, dynamic>);
+    await routing.onHandshake(theirs);
+
+    // 2. bundle: only what the routing policy picks for this peer
+    final link = LinkContext(
+      rssi: peer.rssi,
+      connectedFor: DateTime.now().difference(_connectedAt[peer.id] ?? DateTime.now()),
+      neighbours: _discoveredDevices.where((d) => d.isGazaLinkDevice).length,
+    );
+    final selected = await routing.selectForPeer(theirs, link);
+    _updateSyncStatus(SyncStatus.inProgress, 0.5,
+        'Sending ${selected.length} routed message(s) to ${peer.name}...');
+    await _sendFrame(characteristic, {
+      't': 'bundle',
+      'messages': selected.map((m) => routing.prepareForTransfer(m).toJson()).toList(),
+    }, chunkSize);
+
+    _updateSyncStatus(SyncStatus.inProgress, 0.75, 'Receiving messages from ${peer.name}...');
+    final bundleIn = await _receiveFrame(characteristic) as Map<String, dynamic>;
+    if (bundleIn['t'] != 'bundle') throw Exception('Unexpected frame from peer: ${bundleIn['t']}');
+
+    for (final m in selected) {
+      await _storage.markForwarded(m, toDestination: m.destinationId == theirs.nodeId);
+    }
+    final incoming = (bundleIn['messages'] as List)
+        .map((j) => Message.fromJson(j as Map<String, dynamic>))
+        .toList();
+    final result = await _storage.ingestMessages(incoming, routing.nodeId);
+
+    _updateSyncStatus(
+      SyncStatus.completed,
+      1.0,
+      'Synced with ${peer.name}: sent ${selected.length}, received ${result.relayed.length + result.delivered.length}'
+      '${result.delivered.isNotEmpty ? ' (${result.delivered.length} for you)' : ''}',
+    );
+  }
+
+  Future<void> _sendFrame(BluetoothCharacteristic c, Object json, int chunkSize) async {
+    for (final chunk in FrameCodec.encode(json, chunkSize: chunkSize)) {
+      await _withRetry(() => c.write(chunk, withoutResponse: false), 'write');
+    }
+  }
+
+  Future<Object> _receiveFrame(BluetoothCharacteristic c) async {
+    final assembler = FrameAssembler();
+    final deadline = DateTime.now().add(FRAME_TIMEOUT);
+    while (DateTime.now().isBefore(deadline)) {
+      final chunk = await _withRetry(() => c.read(), 'read');
+      if (chunk.isEmpty) {
+        await Future.delayed(const Duration(milliseconds: 200));
+        continue;
+      }
+      final frame = assembler.add(chunk);
+      if (frame != null) return frame;
+    }
+    throw TimeoutException('Peer did not complete a frame', FRAME_TIMEOUT);
+  }
+
+  Future<T> _withRetry<T>(Future<T> Function() op, String what) async {
+    for (var attempt = 1;; attempt++) {
+      try {
+        return await op();
+      } catch (e) {
+        if (attempt >= MAX_RETRY_ATTEMPTS) {
+          throw Exception('Failed to $what after $MAX_RETRY_ATTEMPTS attempts: $e');
         }
-      }
-    } catch (e) {
-      developer.log('Error sending local queue: $e', name: 'BluetoothService');
-      _updateSyncStatus(
-        SyncStatus.error,
-        0.0,
-        'Error sending messages',
-        error: e.toString(),
-      );
-      rethrow;
-    }
-  }
-
-  // Split data into MTU-sized chunks
-  List<List<int>> _splitDataIntoChunks(String data) {
-    final bytes = utf8.encode(data);
-    final chunks = <List<int>>[];
-    
-    for (var i = 0; i < bytes.length; i += MTU_SIZE) {
-      final end = (i + MTU_SIZE < bytes.length) ? i + MTU_SIZE : bytes.length;
-      chunks.add(bytes.sublist(i, end));
-    }
-    
-    return chunks;
-  }
-
-  // Send a chunk with retry logic
-  Future<void> _sendChunkWithRetry(BluetoothCharacteristic characteristic, List<int> chunk, [int attempt = 1]) async {
-    try {
-      await characteristic.write(chunk, withoutResponse: false);
-    } catch (e) {
-      if (attempt < MAX_RETRY_ATTEMPTS) {
-        developer.log('Retry attempt $attempt for chunk', name: 'BluetoothService');
+        developer.log('Retry $attempt for $what', name: 'BluetoothService');
         await Future.delayed(RETRY_DELAY);
-        await _sendChunkWithRetry(characteristic, chunk, attempt + 1);
-      } else {
-        throw Exception('Failed to send chunk after $MAX_RETRY_ATTEMPTS attempts');
       }
     }
   }
 
-  // Receive data with retry logic
-  Future<String> _receiveDataWithRetry(BluetoothCharacteristic characteristic, [int attempt = 1]) async {
-    try {
-      final receivedChunks = <List<int>>[];
-      
-      while (true) {
-        final value = await characteristic.read();
-        if (value.isEmpty) break; // End of transmission
-        receivedChunks.add(value);
-      }
-      
-      final allBytes = receivedChunks.expand((chunk) => chunk).toList();
-      return utf8.decode(allBytes);
-    } catch (e) {
-      if (attempt < MAX_RETRY_ATTEMPTS) {
-        developer.log('Retry attempt $attempt for receiving data', name: 'BluetoothService');
-        await Future.delayed(RETRY_DELAY);
-        return _receiveDataWithRetry(characteristic, attempt + 1);
-      } else {
-        throw Exception('Failed to receive data after $MAX_RETRY_ATTEMPTS attempts');
-      }
-    }
-  }
-
-  // Receive and merge incoming message queue from peer
-  Future<void> _receiveMessageQueueFromPeer(String jsonData, String peerDeviceId) async {
-    try {
-      developer.log('Processing incoming messages from peer: $peerDeviceId', name: 'BluetoothService');
-      
-      final storageService = StorageService();
-      await storageService.mergeIncomingMessages(jsonData);
-      
-      // Update delivery status for messages we just received
-      await _updateDeliveryStatusesForReceivedMessages(jsonData);
-      
-      developer.log('Successfully merged messages from peer: $peerDeviceId', name: 'BluetoothService');
-      
-    } catch (e) {
-      developer.log('Error receiving messages from peer $peerDeviceId: $e', name: 'BluetoothService');
-      rethrow;
-    }
-  }
-
-  // Update delivery statuses for received messages
-  Future<void> _updateDeliveryStatusesForReceivedMessages(String jsonData) async {
-    try {
-      final List<dynamic> messagesData = jsonDecode(jsonData);
-      final storageService = StorageService();
-      
-      for (final messageData in messagesData) {
-        final message = Message.fromJson(messageData);
-        // Mark messages as "sent" since we received them from another device
-        await storageService.updateDeliveryStatus(message.id, DeliveryStatus.sent);
-      }
-      
-      developer.log('Updated delivery statuses for ${messagesData.length} received messages', name: 'BluetoothService');
-      
-    } catch (e) {
-      developer.log('Error updating delivery statuses: $e', name: 'BluetoothService');
-    }
-  }
-
-  // Update sync status
   void _updateSyncStatus(SyncStatus status, double progress, String message, {String? error}) {
-    _currentSyncStatus = status;
     _syncStatusController.add(SyncProgress(
       status: status,
       progress: progress,
@@ -456,7 +390,6 @@ class BluetoothService {
     ));
   }
 
-  // Get network topology data for DQL
   Map<String, dynamic> getNetworkTopologyData() {
     return {
       'timestamp': DateTime.now().toIso8601String(),
@@ -468,14 +401,14 @@ class BluetoothService {
     };
   }
 
-  // Cleanup
   void dispose() {
     _syncStatusController.close();
     _scanSubscription?.cancel();
+    stopAdvertising();
     _discoveredDevices.clear();
     _connectedDevices.clear();
+    _connectedAt.clear();
     _scanStatus = BluetoothScanStatus.idle;
     _connectionStatus = BluetoothConnectionStatus.disconnected;
-    _isInitialized = false;
   }
 }
