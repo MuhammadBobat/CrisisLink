@@ -15,6 +15,8 @@ class FakeNetwork(var nowMs: Long = 1_800_000_000_000L) {
     private val queue = ArrayDeque<Triple<MeshEngine, String, ByteArray>>()
     val nodes = mutableListOf<Node>()
     var tamper: ((ByteArray) -> ByteArray)? = null
+    /** Every packet sent, in order, as (sender link id, bytes). Lets tests replay recorded traffic. */
+    val sentLog = mutableListOf<Pair<String, ByteArray>>()
     var sentPackets = 0
 
     /** [skewMs] makes this phone's clock run ahead (positive) or behind (negative) of the network's. */
@@ -38,6 +40,7 @@ class FakeNetwork(var nowMs: Long = 1_800_000_000_000L) {
         override val connectedAtMs = nowMs
         override fun send(packet: ByteArray) {
             sentPackets++
+            sentLog += id to packet
             queue.addLast(Triple(to, toLinkId, tamper?.invoke(packet) ?: packet))
         }
     }

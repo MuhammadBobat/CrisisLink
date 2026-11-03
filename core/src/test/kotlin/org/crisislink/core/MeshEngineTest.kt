@@ -244,4 +244,67 @@ class MeshEngineTest {
         net.connect(a, b)
         assertEquals(1, b.received.size)
     }
+
+    // ---- replayed handshakes ------------------------------------------------------------------
+
+    private fun helloFrom(net: FakeNetwork, linkId: String) =
+        net.sentLog.first { it.first == linkId && it.second[1].toInt() == 1 }.second     // type 1 = HELLO
+
+    @Test
+    fun recordedHelloCannotBePlayedBackLater() {
+        val net = FakeNetwork()
+        val a = net.Node("A"); val b = net.Node("B")
+        net.connect(a, b)
+        val recorded = helloFrom(net, "A->B")
+        net.disconnect(a, b)
+        net.nowMs += 10 * 60_000L
+        net.connect(a, b)                                  // a fresh, genuine HELLO is accepted
+        assertTrue(b.rejected.isEmpty())
+
+        b.engine.onPacket("B->A", recorded)                // the recording is not
+        assertTrue("replayed or stale hello" in b.rejected)
+    }
+
+    @Test
+    fun replayedHelloDoesNotBoostTheSendersEncounterRecord() {
+        val net = FakeNetwork()
+        val a = net.Node("A"); val b = net.Node("B")
+        net.connect(a, b)
+        val recorded = helloFrom(net, "A->B")
+        net.disconnect(a, b)
+        val before = b.store.loadEncounters()!!.first[a.identity.nodeId]!!
+        net.nowMs += 60 * 60_000L
+        b.engine.onLinkUp(object : org.crisislink.core.mesh.Link {
+            override val id = "B->A"; override val rssi = -60; override val connectedAtMs = net.nowMs
+            override fun send(packet: ByteArray) {}
+        })
+        b.engine.onPacket("B->A", recorded)
+        assertEquals(before, b.store.loadEncounters()!!.first[a.identity.nodeId]!!, 0.0)
+    }
+
+    @Test
+    fun helloFromAFarOffClockIsRejected() {
+        val net = FakeNetwork()
+        val a = net.Node("A", skewMs = 72 * 3600_000L); val b = net.Node("B")
+        net.connect(a, b)
+        assertTrue("replayed or stale hello" in b.rejected)
+    }
+
+    @Test
+    fun reconnectingManyTimesNeverLooksLikeAReplay() {
+        val net = FakeNetwork()
+        val a = net.Node("A"); val b = net.Node("B")
+        repeat(5) { net.connect(a, b); net.disconnect(a, b) }      // same instant each time
+        assertTrue(a.rejected.isEmpty() && b.rejected.isEmpty())
+    }
+
+    @Test
+    fun aClockThatStepsBackwardsStillGetsThroughOnReconnect() {
+        val net = FakeNetwork()
+        val a = net.Node("A"); val b = net.Node("B")
+        net.connect(a, b); net.disconnect(a, b)
+        net.nowMs -= 30_000L                                        // e.g. a network time correction
+        net.connect(a, b)
+        assertTrue(b.rejected.isEmpty())
+    }
 }
