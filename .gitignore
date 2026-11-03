@@ -51,3 +51,10 @@ simulation/results/*.pt
 simulation/results/results.json
 __pycache__/
 .pytest_cache/
+
+# Gradle / Android
+.gradle/
+build/
+local.properties
+*.apk
+captures/

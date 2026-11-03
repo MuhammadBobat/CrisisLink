@@ -1,6 +1,6 @@
-"""Dump real simulator decisions (raw inputs + feature vector) for the Dart parity test.
+"""Dump real simulator decisions (raw inputs + feature vector) for the Kotlin parity test.
 
-    python make_fixtures.py   # writes ../test/fixtures/feature_cases.json
+    python make_fixtures.py   # writes fixtures/feature_cases.json (read by the Kotlin parity tests)
 """
 import json
 import os
@@ -12,7 +12,7 @@ from crisislink import policies as P
 from crisislink.config import SimConfig
 from crisislink.network import DTNSimulator
 
-OUT = os.path.join(os.path.dirname(__file__), "..", "test", "fixtures", "feature_cases.json")
+OUT = os.path.join(os.path.dirname(__file__), "fixtures", "feature_cases.json")
 
 
 class Probe(P.Epidemic):

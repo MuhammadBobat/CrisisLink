@@ -1,4 +1,4 @@
-"""Export a trained QNet as JSON for the on-device Dart policy, plus parity vectors."""
+"""Export a trained QNet as JSON for the on-device Kotlin policy, plus parity vectors."""
 import json
 import os
 

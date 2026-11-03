@@ -1,83 +1,74 @@
-# GazaLink: Offline BLE Message Routing for Crisis Zones
+# CrisisLink: offline Bluetooth message mesh for crisis zones
 
-GazaLink is an Android Flutter app for delay-tolerant messaging when there is no internet, WiFi or
-cellular service. Phones exchange messages directly over low-rate Bluetooth LE whenever two of them
-meet, and carry other people's messages onward until they reach the recipient.
+CrisisLink is an Android app that passes messages phone to phone over Bluetooth LE when there is no
+internet, WiFi or cellular service. Phones carry other people's messages onward and hand them over
+when they meet the recipient. A **Deep Q-Learning policy trained in simulation** decides which
+messages to copy to which neighbour, so batteries, buffers and the slow radio are not wasted on flooding.
 
-The hard part is deciding **which messages to hand to which peer**. Flooding everything to everyone
-delivers well but exhausts batteries, buffers and a very slow radio. GazaLink instead uses a
-**Deep Q-Learning policy trained in simulation** and evaluated on-device: each phone decides, from
-its own local view plus a small handshake, whether to copy a message to the peer in front of it.
+**Status: a working prototype that has not yet been run on real phones.** All logic is unit-tested and
+the app builds, but nothing has been tested over a real BLE link. See [Limitations](#limitations).
 
 ## How it works
 
-```
- simulation/ (Python)                      lib/ (Flutter / Dart)
- ────────────────────                      ──────────────────────
- mobility + traffic + BLE budget  ─┐
- DQN training (PyTorch)            ├─►  assets/policy/dqn_policy.json ─► DqnPolicy (pure Dart MLP)
- benchmark vs flooding & DTN       ─┘                                     │
-                                                                          ▼
- BLE scan/connect ─► hello (PeerSummary) ─► RoutingService.selectForPeer ─► bundle ─► ingest
-```
+- **Every phone is both a BLE GATT server and client.** It advertises a CrisisLink service with its node ID
+  in the scan response and scans for others. Only the phone with the lower ID dials, so each pair has one link.
+- **A foreground service** (`connectedDevice`) keeps the mesh running with the app closed, restarts after
+  reboot, and switches between four power profiles (scan duty cycles from continuous down to 1 s every 30 s)
+  by charging state, battery level and foreground/background.
+- **Handshake, then routed bundle.** Linked phones swap a signed `HELLO` (battery, free buffer, encounter
+  history, held message IDs, signed delivery acks). Each side then sends only the messages its router picks
+  for that neighbour, urgent first.
+- **Routing from the local view.** The default router is a 16-input Q-network ([simulation/](simulation/README.md)).
+  Spray-and-Wait and PRoPHET are selectable in the app; Spray-and-Wait delivered more in simulation.
+- **Delivery receipts** are signed by the recipient, so relays can drop their copies without anyone being able
+  to forge "delivered" and suppress a message.
 
-1. **Hello:** two connected nodes swap a small summary: battery, free buffer, their encounter
-   predictability row (PRoPHET-style), the ids of messages they hold, and ids known to be delivered.
-2. **Decide:** for each message it holds, a node builds a 16-feature state (priority, remaining TTL,
-   hops, how likely each side is to meet the destination, buffer/battery, link quality, copies
-   already made, ...) and asks the Q-network whether forwarding beats holding.
-3. **Bundle:** only the chosen messages (urgent first, a destination always first) are sent, within a
-   small per-contact budget. Delivered ids spread as anti-packets so nodes stop carrying them.
+## Encryption
 
-No routes are computed or stored. See [simulation/README.md](simulation/README.md) for the
-simulation model, state/action/reward design and benchmark results.
+| What | How |
+|---|---|
+| Identity | X25519 (encrypt) + Ed25519 (sign) keys generated on first launch, stored encrypted by an Android Keystore AES-GCM key. Node ID = first 8 bytes of SHA-256 of both public keys |
+| Contacts | Exchanged in person by QR code (name + both public keys). The node ID is recomputed from the keys, so a code cannot claim another's ID. Fingerprints can be compared and marked verified |
+| Direct messages | Sealed to the recipient with HPKE (X25519, HKDF-SHA256, ChaCha20-Poly1305) via Google Tink, padded to 256/512/1024/2048-byte buckets, signed by the sender, with the signed header bound into the ciphertext |
+| Broadcasts | Signed, not encrypted (they are public). Hop-capped at 3 |
+| Handshakes and acks | Signed; unsigned or badly signed packets are rejected before anything is stored |
+| Abuse limits | Per-link packet rate limit, payload and fragment size caps, reassembly timeouts |
+| Panic wipe | Deletes keys, database and settings |
+
+**What this does not protect:** sealed messages have **no forward secrecy** (the recipient may be offline for hours, so
+there is no interactive handshake); relays can see who a message is addressed to, its priority and its size bucket;
+there is no hop-by-hop link encryption yet; and anyone can read broadcasts. Treat the design as unreviewed until it
+has had an independent security review.
 
 ## Repository layout
 
 | Path | What it is |
 |---|---|
-| `lib/routing/` | feature builder, Q-network inference, encounter table, handshake summary, routing service |
-| `lib/services/` | BLE service (scan, connect, framed sync), storage (buffer limits, anti-packets), frame codec |
-| `lib/screens`, `lib/widgets` | message queue, create (with recipient node ID), dashboard (your node ID, policy status) |
-| `simulation/` | Python simulator, DQN trainer, baselines, evaluation, tests |
-| `assets/policy/dqn_policy.json` | the trained policy shipped in the app (weights + parity vectors) |
+| `core/` | Pure-Kotlin library (JVM-testable): routing, binary protocol, fragmentation, crypto, mesh engine, storage interface |
+| `app/` | Android app: BLE transport, power profiles, foreground service, Room storage, Keystore, Compose UI |
+| `app/src/main/assets/policy/dqn_policy.json` | The trained policy (weights plus parity vectors) |
+| `simulation/` | Python simulator, DQN trainer, baselines, benchmark |
 
-## Getting started
+## Build and test
 
-```bash
-flutter pub get
-flutter analyze
-flutter test
-flutter run -d android        # BLE needs physical devices; use two to test sync
-```
-
-Android permissions (Bluetooth scan/connect, location for BLE scanning) are declared in
-`android/app/src/main/AndroidManifest.xml`. Development targets Android; the `ios/` project was removed.
-
-### Retraining the policy
+Needs JDK 17+ (21 works) and the Android SDK (platform 35, build-tools 35).
 
 ```bash
-cd simulation
-pip install -r requirements.txt
-python train.py --episodes 150 --out ../assets/policy/dqn_policy.json
-python evaluate.py                 # benchmark on held-out worlds
-python make_fixtures.py            # refresh Dart feature-parity fixtures
-cd .. && flutter test              # parity tests fail if Python and Dart disagree
+./gradlew :core:test              # 29 tests, no device needed
+./gradlew :app:assembleDebug      # app/build/outputs/apk/debug/app-debug.apk
+./gradlew :app:lintDebug
+cd simulation && python -m pytest tests -q
 ```
 
-## Addressing messages
+Retrain the policy: `cd simulation && python train.py --episodes 150` (writes into the app's assets), then
+`python make_fixtures.py` and `./gradlew :core:test`. The parity tests fail if Python and Kotlin disagree.
 
-Each install has an 8-character **node ID** (dashboard, with a copy button). When creating a message,
-enter the recipient's node ID to have it routed to them, or leave it empty to broadcast to nearby
-nodes (flooded up to 3 hops).
+## Limitations
 
-## Known limitations
-
-- **No GATT server yet.** `flutter_blue_plus` is central-only, so this build can connect to and sync
-  with a peer that exposes the GazaLink service, but a phone cannot yet advertise and serve the
-  message characteristic itself. Two-phone sync needs a native Android GATT server (not implemented);
-  `startAdvertising()` only sets a flag. The routing, framing and storage logic is fully tested
-  without hardware.
-- **Sim-to-real gap.** The policy is trained on synthetic clustered-waypoint mobility. Validate against
-  real contact traces before relying on the benchmark numbers.
-- No message encryption yet.
+- **Not tested on hardware.** BLE behaviour varies a lot by vendor (advertising limits, GATT status 133, scan
+  throttling, background killing on Xiaomi/Huawei/Samsung). Expect to tune on real devices.
+- **The learned policy loses to Spray-and-Wait on delivery** in simulation (0.75 vs 0.81) and has only been
+  evaluated on synthetic mobility. See [simulation/README.md](simulation/README.md).
+- **Android only.** iPhones cannot take part.
+- **Contacts only for private messages**, since the sender needs the recipient's public key while the recipient is offline.
+- **Unreviewed cryptography design**; no forward secrecy; metadata is visible to relays.

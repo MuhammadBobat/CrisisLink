@@ -1,13 +1,13 @@
 # CrisisLink simulation and Deep Q-Learning trainer
 
-Trains the forwarding policy that GazaLink runs on-device, and benchmarks it against flooding and
+Trains the forwarding policy that CrisisLink runs on-device, and benchmarks it against flooding and
 standard delay-tolerant-network (DTN) baselines.
 
 ```bash
 pip install -r requirements.txt
 python train.py --episodes 150 --out ../assets/policy/dqn_policy.json   # ~15 min on a laptop CPU
 python evaluate.py --runs 30 --skip-sweeps                              # writes results/report.md, tradeoff.png
-python make_fixtures.py                                                 # Dart feature-parity fixtures
+python make_fixtures.py                                                 # Kotlin feature-parity fixtures
 python -m pytest tests -q
 ```
 

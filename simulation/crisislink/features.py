@@ -2,7 +2,7 @@
 
 Every feature is in [0, 1] and is observable by node `a` from its own state plus the
 peer's handshake summary. The same order and definitions are reimplemented in
-lib/routing/feature_builder.dart; tests/test_policy_parity.py pins them together.
+core/src/main/kotlin/org/crisislink/core/routing/FeatureBuilder.kt; ParityTest.kt pins them together.
 """
 
 FEATURE_NAMES = [

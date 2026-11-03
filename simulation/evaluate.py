@@ -1,6 +1,6 @@
 """Benchmark the exported DQN policy against flooding and DTN baselines on held-out worlds.
 
-    python evaluate.py --policy ../assets/policy/dqn_policy.json --runs 30
+    python evaluate.py --policy ../app/src/main/assets/policy/dqn_policy.json --runs 30
 
 Every policy sees the same worlds (same seeds => same mobility and traffic), so
 comparisons are paired. Test seeds (1000+) are disjoint from training/validation seeds.
@@ -91,7 +91,7 @@ def paired(results, a, b, metric):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--policy", default="../assets/policy/dqn_policy.json")
+    ap.add_argument("--policy", default="../app/src/main/assets/policy/dqn_policy.json")
     ap.add_argument("--runs", type=int, default=30)
     ap.add_argument("--sweep-runs", type=int, default=10)
     ap.add_argument("--out", default="results")

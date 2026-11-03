@@ -1,6 +1,6 @@
 """Train the shared-parameter forwarding DQN in simulation and export it for the app.
 
-    python train.py --episodes 150 --out ../assets/policy/dqn_policy.json
+    python train.py --episodes 150 --out ../app/src/main/assets/policy/dqn_policy.json
 """
 import argparse
 import json
@@ -45,7 +45,7 @@ def main():
     ap.add_argument("--val-seeds", type=int, default=5)
     ap.add_argument("--updates-per-step", type=int, default=1)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--out", default="../assets/policy/dqn_policy.json")
+    ap.add_argument("--out", default="../app/src/main/assets/policy/dqn_policy.json")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)

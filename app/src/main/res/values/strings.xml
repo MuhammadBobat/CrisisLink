@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">CrisisLink</string>
+    <string name="notification_channel">Mesh status</string>
+    <string name="notification_title">CrisisLink mesh active</string>
+    <string name="notification_peers">%1$d nearby · %2$d carried</string>
+    <string name="notification_quit">Stop</string>
+    <string name="message_channel">Messages</string>
+</resources>
